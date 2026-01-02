@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+
+    <!-- favicon -->
+    <link rel="icon" type="image/svg+xml" href="./vite.svg" />
+
+    <!-- ✅ iOS Safari 안정 viewport (자동 확대 방지) -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+
+    <title>daisy-core</title>
+
+    <style>
+      /* =====================
+         Global Reset
+      ===================== */
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #000;
+        -webkit-text-size-adjust: 100%; /* ✅ iOS 폰트 자동 확대 방지 */
+      }
+
+      body {
+        overflow-x: clip; /* iOS 확대 고착 방지 */
+      }
+
+      /* =====================
+         React Root
+      ===================== */
+      #root {
+        width: 100%;
+        min-height: 100dvh; /* ✅ iOS 주소창 대응 */
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* =====================
+         iOS input 자동 줌 방지
+      ===================== */
+      input,
+      textarea,
+      select {
+        font-size: 16px; /* 🔥 iOS 자동 확대 차단 핵심 */
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-BZ9Tzv8y.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DC-gL2xw.css">
+  </head>
+
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
