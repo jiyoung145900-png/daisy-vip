@@ -1,3 +1,4 @@
+console.log('vercel deploy test');
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { db } from "./firebase"; 
 // ★ [핵심] Firestore 함수들 import
