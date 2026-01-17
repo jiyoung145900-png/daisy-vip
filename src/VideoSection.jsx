@@ -15,7 +15,7 @@ export default function VideoSection({
 
   // ★ [핵심 추가] 카테고리명 번역 매핑
   const catTranslation = {
-    "ALL": "ALL",
+    "all": "all",
     "한국": "KOREA",
     "일본": "JAPAN",
     "중국": "CHINA",
