@@ -9,17 +9,16 @@ export const iaStyles = {
   main: { flex: 1, padding: '40px', overflowY: 'auto', background:'#050505' },
   card: { background: '#111', padding: '30px', borderRadius: '25px', border: '1px solid #222', marginBottom:30 },
   bigTabTitle: { fontSize: '28px', marginBottom: '30px', fontWeight: '900', color:'#fff' },
-  monitorBox: { display: 'flex', gap: '30px', background: '#000', padding: '20px', borderRadius: '15px', border:'1px solid #333', alignItems:'center' },
+  monitorBox: { display: 'flex', gap: '30px', background: '#000', padding: '20px', borderRadius: '15px', border:'1px solid #333' },
   table: { width: '100%', borderCollapse: 'collapse', textAlign: 'left' },
   adminInput: { background: '#1a1a1a', border: '1px solid #333', color: '#ffb347', padding: '15px', borderRadius: '10px', fontSize: '20px', width: '200px' },
   searchInputField: { background: '#000', border: '1px solid #333', color: '#fff', padding: '10px', borderRadius: '10px', fontSize: '16px', flex:1 },
   adminItemGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '15px', marginTop: '20px' },
-  // ★ 바카라 버튼용 스타일
-  adminItemCard: { padding: '30px 5px', borderRadius: '15px', textAlign: 'center', cursor: 'pointer', transition: '0.2s', fontWeight:'900', display:'flex', flexDirection:'column', justifyContent:'center', height:'120px' },
+  adminItemCard: { padding: '20px 5px', borderRadius: '12px', textAlign: 'center', cursor: 'pointer', transition: '0.2s' },
   applyBtn: { marginTop: '20px', width: '100%', padding: '20px', background: '#ffb347', color: '#000', border: 'none', borderRadius: '15px', fontWeight: '900', fontSize: '18px', cursor:'pointer' },
   giantInput: { background: '#222', border: '1px solid #444', color: '#fff', padding: '10px', width: '100%', borderRadius: '8px', fontSize: '16px', textAlign: 'center' },
   giantBtn: { background: '#ffb347', border: 'none', padding: '10px 15px', borderRadius: '8px', cursor: 'pointer', fontWeight: '800', fontSize:14 },
-  delBtn: { background: '#333', color:'#ff3b30', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', marginLeft:'auto' },
+  delBtn: { background: '#333', color:'#ff3b30', border: 'none', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' },
   exitBtn: { marginTop: '40px', width: '100%', padding: '15px', background: '#222', color: '#888', border: 'none', borderRadius: '10px', cursor:'pointer', fontWeight:'bold' },
-  queueRow: { background:'#222', padding:'15px', borderRadius:8, marginBottom:5, display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:'16px'}
+  queueRow: { background:'#222', padding:10, borderRadius:8, marginBottom:5, display:'flex', justifyContent:'space-between', alignItems:'center'}
 };
