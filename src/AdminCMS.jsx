@@ -1,37 +1,52 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { uploadToCloudinary } from "./CloudinaryService";
 
 export default function AdminCMS({
   adminPreviewMode,
   setAdminPreviewMode,
+
   hero,
   setHero,
   videoURL,
   setVideoURL,
+
   logo,
   setLogo,
   logoSize,
   setLogoSize,
   logoPos,
   setLogoPos,
+
   innerLogo,
   setInnerLogo,
+
   onExit,
+
   members,
   setMembers,
+
   slideImages,
   setSlideImages,
+
   videos,
   setVideos,
+
   adminPw,
   setAdminPw,
   telegramLink,
   setTelegramLink,
+
+  // 둘 중 하나만 있어도 동작하도록
   saveToFirebase,
   syncToFirebase,
+
   openIndependent,
-  styles, // (unused)
+
+  styles, // unused
 }) {
+  /* =========================
+     0) 기본 데이터/안전값
+  ========================= */
   const regionData = useMemo(
     () => ({
       서울: ["강남/서초/송파", "강동/광진/성동", "마포/강서/양천", "영등포/구로/금천", "종로/중구/용산", "동대문/중랑/노원"],
@@ -52,8 +67,12 @@ export default function AdminCMS({
   const videoCategories = useMemo(() => ["한국", "일본", "중국", "동남아", "서양"], []);
 
   const safeHero = hero || { mode: "image", imageSrc: "" };
+  const safeVideoURL = videoURL || "";
   const safeLogoPos = logoPos || { x: 20, y: 20 };
   const safeLogoSize = typeof logoSize === "number" ? logoSize : 50;
+  const safeMembers = Array.isArray(members) ? members : [];
+  const safeSlide = Array.isArray(slideImages) ? slideImages : [];
+  const safeVideos = Array.isArray(videos) ? videos : [];
 
   const initialMember = useMemo(
     () => ({
@@ -72,6 +91,7 @@ export default function AdminCMS({
 
   const [newM, setNewM] = useState(initialMember);
   const [editingId, setEditingId] = useState(null);
+
   const [loading, setLoading] = useState(false);
 
   const [videoCategory, setVideoCategory] = useState("한국");
@@ -82,26 +102,106 @@ export default function AdminCMS({
   const [tempVideoUrl, setTempVideoUrl] = useState("");
 
   const isFn = (v) => typeof v === "function";
+
+  /* =========================
+     1) "진짜 저장"을 위한 공통 저장 함수
+     - syncToFirebase 있으면 즉시 저장
+     - 없으면 실패로 처리(사용자에게 알려야 함)
+  ========================= */
   const safeSync = async (payload) => {
-    if (!isFn(syncToFirebase)) return true; // sync 함수 없으면 그냥 성공 처리(크래시 방지)
+    if (!isFn(syncToFirebase)) {
+      alert("❌ 저장 함수(syncToFirebase)가 연결되지 않았습니다.\nApp.jsx에서 AdminCMS에 syncToFirebase props 전달 확인하세요.");
+      return false;
+    }
     try {
-      return await syncToFirebase(payload);
+      const res = await syncToFirebase(payload);
+      return !!res;
     } catch (e) {
       console.error("[syncToFirebase] error", e);
       return false;
     }
   };
 
-  // ✅ logoSize/logoPos 저장: 마우스업/터치엔드에서만 저장(너무 잦은 저장 방지)
-  const saveLogoUi = async (nextLogoSize, nextLogoPos) => {
-    await safeSync({
-      logoSize: typeof nextLogoSize === "number" ? nextLogoSize : safeLogoSize,
-      logoPos: nextLogoPos || safeLogoPos,
-    });
+  /* =========================
+     2) 로고 UI 저장(최신값 저장 보장)
+  ========================= */
+  const logoSizeRef = useRef(safeLogoSize);
+  const logoPosRef = useRef(safeLogoPos);
+
+  useEffect(() => {
+    logoSizeRef.current = safeLogoSize;
+  }, [safeLogoSize]);
+
+  useEffect(() => {
+    logoPosRef.current = safeLogoPos;
+  }, [safeLogoPos]);
+
+  const saveLogoUi = async () => {
+    const next = {
+      logoSize: typeof logoSizeRef.current === "number" ? logoSizeRef.current : 50,
+      logoPos: logoPosRef.current || { x: 20, y: 20 },
+    };
+    const ok = await safeSync(next);
+    if (!ok) alert("로고 위치/크기 저장 실패 ❌");
   };
 
+  /* =========================
+     3) 공통: 업로드 + 필요 시 즉시 저장
+     - heroImg, heroVid, logo, innerLogo 는 즉시 저장
+     - member/video 모달 업로드는 목록 추가 버튼에서 저장(원래 UX)
+  ========================= */
+  const handleFileProcess = async (e, mode, callback) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setLoading(true);
+      const url = await uploadToCloudinary(file);
+
+      if (!url) {
+        alert("업로드 실패(Cloudinary) ❌");
+        return;
+      }
+
+      if (isFn(callback)) callback(url);
+
+      let updates = null;
+
+      if (mode === "logo") updates = { logo: url };
+      if (mode === "innerLogo") updates = { innerLogo: url };
+      if (mode === "heroImg") updates = { hero: { ...safeHero, imageSrc: url, mode: "image" } };
+      if (mode === "heroVid") updates = { videoURL: url, hero: { ...safeHero, mode: "video" } };
+
+      if (updates) {
+        const ok = await safeSync(updates);
+        if (!ok) alert("업로드는 됐지만 서버 저장 실패(권한/네트워크 확인) ❌");
+      }
+    } catch (err) {
+      console.error("업로드/저장 에러:", err);
+      alert("업로드/저장 중 오류가 발생했습니다.");
+    } finally {
+      setLoading(false);
+      e.target.value = "";
+    }
+  };
+
+  /* =========================
+     4) 시스템 설정 저장(텔레그램/관리자 비번)
+  ========================= */
+  const handleSaveSystemSettings = async () => {
+    if (loading) return;
+    setLoading(true);
+    const ok = await safeSync({ telegramLink: telegramLink || "", adminPw: adminPw || "" });
+    setLoading(false);
+    if (ok) alert("✅ 텔레그램/관리자 비밀번호가 서버에 저장되었습니다!");
+    else alert("❌ 저장 실패(권한/네트워크 확인)");
+  };
+
+  /* =========================
+     5) 매니저 저장/삭제/수정
+  ========================= */
   const handleRegionChange = (val) => {
-    setNewM({ ...newM, region: val, loc: regionData[val][0] });
+    setNewM((prev) => ({ ...prev, region: val, loc: regionData[val][0] }));
   };
 
   const startEdit = (m) => {
@@ -113,104 +213,118 @@ export default function AdminCMS({
   };
 
   const saveMember = async () => {
-    if (loading) return alert("파일 업로드 중입니다. 잠시만 기다려주세요.");
-    if (!newM.img || !newM.name) return alert("매니저 이름과 사진은 필수입니다.");
+    if (loading) return alert("처리 중입니다. 잠시만 기다려주세요.");
+    if (!newM.name || !newM.img) return alert("매니저 이름과 사진은 필수입니다.");
 
-    let updatedMembers;
-    if (editingId) {
-      updatedMembers = (members || []).map((m) => (m.id === editingId ? { ...newM, id: editingId } : m));
-      setEditingId(null);
-    } else {
-      updatedMembers = [...(members || []), { ...newM, id: Date.now() }];
-    }
+    const base = safeMembers;
+    const next = editingId
+      ? base.map((m) => (m.id === editingId ? { ...newM, id: editingId } : m))
+      : [...base, { ...newM, id: Date.now() }];
 
-    setMembers?.(updatedMembers);
+    setMembers?.(next);
+
     setLoading(true);
-    const ok = await safeSync({ members: updatedMembers });
+    const ok = await safeSync({ members: next });
     setLoading(false);
 
-    if (ok) {
-      setNewM(initialMember);
-      alert("매니저 정보가 서버에 즉시 반영되었습니다! ✅");
-    } else {
-      alert("저장 실패(서버 동기화 오류) ❌");
-    }
+    if (!ok) return alert("❌ 저장 실패(서버 동기화 오류)");
+
+    alert("✅ 매니저 정보가 서버에 반영되었습니다!");
+    setEditingId(null);
+    setNewM(initialMember);
+    setShowManagerModal(false);
   };
 
+  const deleteMember = async (id) => {
+    if (loading) return;
+    if (!confirm("삭제하시겠습니까?")) return;
+    const next = safeMembers.filter((m) => m.id !== id);
+    setMembers?.(next);
+
+    setLoading(true);
+    const ok = await safeSync({ members: next });
+    setLoading(false);
+
+    if (!ok) alert("❌ 삭제 저장 실패(서버 동기화 오류)");
+  };
+
+  /* =========================
+     6) 비디오 갤러리 저장/삭제
+  ========================= */
   const saveVideoToGallery = async () => {
     if (loading) return alert("처리 중입니다. 잠시만 기다려주세요.");
     if (!tempVideoUrl) return alert("영상 파일을 먼저 업로드해주세요.");
 
-    let updatedVideos;
-    if (editingVideoId) {
-      updatedVideos = (videos || []).map((v) =>
-        v.id === editingVideoId ? { ...v, url: tempVideoUrl, category: videoCategory, description: videoDesc } : v
-      );
-      setEditingVideoId(null);
-    } else {
-      updatedVideos = [...(videos || []), { id: Date.now(), url: tempVideoUrl, category: videoCategory, description: videoDesc }];
-    }
+    const base = safeVideos;
 
-    setVideos?.(updatedVideos);
+    const next = editingVideoId
+      ? base.map((v) => (v.id === editingVideoId ? { ...v, url: tempVideoUrl, category: videoCategory, description: videoDesc } : v))
+      : [...base, { id: Date.now(), url: tempVideoUrl, category: videoCategory, description: videoDesc }];
+
+    setVideos?.(next);
+
     setLoading(true);
-    const ok = await safeSync({ videos: updatedVideos });
+    const ok = await safeSync({ videos: next });
     setLoading(false);
 
-    if (ok) {
-      setTempVideoUrl("");
-      setVideoDesc("");
-      alert("갤러리 영상이 서버에 반영되었습니다! ✅");
-    } else {
-      alert("저장 실패(서버 동기화 오류) ❌");
-    }
+    if (!ok) return alert("❌ 저장 실패(서버 동기화 오류)");
+
+    alert("✅ 갤러리 영상이 서버에 반영되었습니다!");
+    setTempVideoUrl("");
+    setVideoDesc("");
+    setEditingVideoId(null);
+    setShowVideoModal(false);
   };
 
-  // ✅ 업로드 + (필요한 경우) 서버 즉시 저장
-  const handleFileProcess = async (e, mode, callback) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const deleteVideo = async (id) => {
+    if (loading) return;
+    if (!confirm("삭제하시겠습니까?")) return;
+    const next = safeVideos.filter((v) => v.id !== id);
+    setVideos?.(next);
 
+    setLoading(true);
+    const ok = await safeSync({ videos: next });
+    setLoading(false);
+
+    if (!ok) alert("❌ 삭제 저장 실패(서버 동기화 오류)");
+  };
+
+  /* =========================
+     7) 배너 업로드/삭제
+  ========================= */
+  const addBanners = async (files) => {
+    if (loading) return;
+    if (!files || files.length === 0) return;
+
+    setLoading(true);
     try {
-      setLoading(true);
-      const url = await uploadToCloudinary(file);
+      const urls = await Promise.all(files.map((f) => uploadToCloudinary(f)));
+      const newImgs = urls.filter(Boolean).map((u) => ({ id: Date.now() + Math.random(), url: u }));
+      const next = [...safeSlide, ...newImgs];
 
-      if (url) {
-        if (isFn(callback)) callback(url);
+      setSlideImages?.(next);
 
-        let updates = {};
-        if (mode === "logo") updates = { logo: url };
-        else if (mode === "innerLogo") updates = { innerLogo: url };
-        else if (mode === "heroImg") updates = { hero: { ...safeHero, imageSrc: url, mode: "image" } };
-        // ✅ 핵심: heroVid 저장 누락 해결
-        else if (mode === "heroVid") updates = { videoURL: url, hero: { ...safeHero, mode: "video" } };
-
-        if (Object.keys(updates).length > 0) {
-          const ok = await safeSync(updates);
-          if (!ok) alert("업로드는 됐지만 서버 저장이 실패했습니다(권한/네트워크 확인) ❌");
-        }
-      }
-    } catch (err) {
-      console.error("저장 과정 에러:", err);
-      alert("업로드/저장 중 오류가 발생했습니다.");
+      const ok = await safeSync({ slideImages: next });
+      if (!ok) alert("❌ 배너 저장 실패(서버 동기화 오류)");
+    } catch (e) {
+      console.error(e);
+      alert("배너 업로드/저장 오류");
     } finally {
       setLoading(false);
-      e.target.value = "";
     }
   };
 
-  // ✅ 시스템 설정 저장(텔레그램/비밀번호)
-  const handleSaveSystemSettings = async () => {
+  const deleteBanner = async (id) => {
     if (loading) return;
-    setLoading(true);
-    const success = await safeSync({
-      telegramLink: telegramLink,
-      adminPw: adminPw,
-    });
-    setLoading(false);
-    if (success) alert("텔레그램 아이디 및 관리자 비밀번호가 즉시 저장되었습니다! ✅");
-    else alert("저장 실패(서버 동기화 오류) ❌");
+    const next = safeSlide.filter((x) => x.id !== id);
+    setSlideImages?.(next);
+    const ok = await safeSync({ slideImages: next });
+    if (!ok) alert("❌ 배너 삭제 저장 실패(서버 동기화 오류)");
   };
 
+  /* =========================
+     8) 프리뷰 탭 안전 전환
+  ========================= */
   const safeSetPreview = (mode) => {
     if (loading) return;
     if (isFn(setAdminPreviewMode)) setAdminPreviewMode(mode);
@@ -246,7 +360,7 @@ export default function AdminCMS({
         </button>
       </div>
 
-      <div style={{ padding: "20px" }}>
+      <div style={{ padding: 20 }}>
         <h3 style={cmsStyles.mainTitle}>SERVER ADMIN PANEL</h3>
 
         {/* SECTION 1: 랜딩 페이지 설정 */}
@@ -255,28 +369,31 @@ export default function AdminCMS({
 
           <div style={{ display: "flex", gap: 5, marginBottom: 15 }}>
             <button
-              onClick={() => {
+              onClick={async () => {
                 setHero?.({ ...safeHero, mode: "image" });
-                safeSync({ hero: { ...safeHero, mode: "image" } });
+                await safeSync({ hero: { ...safeHero, mode: "image" } });
               }}
               style={{
                 ...cmsStyles.modeBtn,
                 background: safeHero.mode === "image" ? "#fff" : "#333",
                 color: safeHero.mode === "image" ? "#000" : "#888",
               }}
+              disabled={loading}
             >
               이미지 모드
             </button>
+
             <button
-              onClick={() => {
+              onClick={async () => {
                 setHero?.({ ...safeHero, mode: "video" });
-                safeSync({ hero: { ...safeHero, mode: "video" } });
+                await safeSync({ hero: { ...safeHero, mode: "video" } });
               }}
               style={{
                 ...cmsStyles.modeBtn,
                 background: safeHero.mode === "video" ? "#fff" : "#333",
                 color: safeHero.mode === "video" ? "#000" : "#888",
               }}
+              disabled={loading}
             >
               동영상 모드
             </button>
@@ -289,9 +406,7 @@ export default function AdminCMS({
               accept="image/*"
               style={cmsStyles.fileInput}
               disabled={loading}
-              onChange={(e) =>
-                handleFileProcess(e, "heroImg", (url) => setHero?.({ ...safeHero, imageSrc: url, mode: "image" }))
-              }
+              onChange={(e) => handleFileProcess(e, "heroImg", (url) => setHero?.({ ...safeHero, imageSrc: url, mode: "image" }))}
             />
             {safeHero.imageSrc && (
               <img
@@ -316,7 +431,7 @@ export default function AdminCMS({
                 })
               }
             />
-            {videoURL && (
+            {safeVideoURL && (
               <div style={{ marginTop: 5 }}>
                 <p style={cmsStyles.checkText}>동영상 준비됨 ✅</p>
               </div>
@@ -325,13 +440,8 @@ export default function AdminCMS({
 
           <div style={cmsStyles.fieldGroup}>
             <label style={cmsStyles.fieldLabel}>중앙 메인 로고 및 위치</label>
-            <input
-              type="file"
-              accept="image/*"
-              style={cmsStyles.fileInput}
-              disabled={loading}
-              onChange={(e) => handleFileProcess(e, "logo", setLogo)}
-            />
+
+            <input type="file" accept="image/*" style={cmsStyles.fileInput} disabled={loading} onChange={(e) => handleFileProcess(e, "logo", setLogo)} />
 
             <div style={cmsStyles.rangeRow}>
               <span>크기: {safeLogoSize}px</span>
@@ -342,8 +452,8 @@ export default function AdminCMS({
                 value={safeLogoSize}
                 disabled={loading}
                 onChange={(e) => setLogoSize?.(+e.target.value)}
-                onMouseUp={() => saveLogoUi(safeLogoSize, safeLogoPos)}
-                onTouchEnd={() => saveLogoUi(safeLogoSize, safeLogoPos)}
+                onMouseUp={saveLogoUi}
+                onTouchEnd={saveLogoUi}
               />
             </div>
 
@@ -357,8 +467,8 @@ export default function AdminCMS({
                   value={safeLogoPos.y}
                   disabled={loading}
                   onChange={(e) => setLogoPos?.({ ...safeLogoPos, y: +e.target.value })}
-                  onMouseUp={() => saveLogoUi(safeLogoSize, safeLogoPos)}
-                  onTouchEnd={() => saveLogoUi(safeLogoSize, safeLogoPos)}
+                  onMouseUp={saveLogoUi}
+                  onTouchEnd={saveLogoUi}
                 />
               </div>
               <div>
@@ -370,8 +480,8 @@ export default function AdminCMS({
                   value={safeLogoPos.x}
                   disabled={loading}
                   onChange={(e) => setLogoPos?.({ ...safeLogoPos, x: +e.target.value })}
-                  onMouseUp={() => saveLogoUi(safeLogoSize, safeLogoPos)}
-                  onTouchEnd={() => saveLogoUi(safeLogoSize, safeLogoPos)}
+                  onMouseUp={saveLogoUi}
+                  onTouchEnd={saveLogoUi}
                 />
               </div>
             </div>
@@ -384,13 +494,7 @@ export default function AdminCMS({
 
           <div style={cmsStyles.fieldGroup}>
             <label style={cmsStyles.fieldLabel}>상단 고정 로고 (Inner Logo)</label>
-            <input
-              type="file"
-              accept="image/*"
-              style={cmsStyles.fileInput}
-              disabled={loading}
-              onChange={(e) => handleFileProcess(e, "innerLogo", setInnerLogo)}
-            />
+            <input type="file" accept="image/*" style={cmsStyles.fileInput} disabled={loading} onChange={(e) => handleFileProcess(e, "innerLogo", setInnerLogo)} />
             {innerLogo && <img src={innerLogo} style={{ maxHeight: 30, marginTop: 5 }} alt="inner-logo" />}
           </div>
 
@@ -405,44 +509,16 @@ export default function AdminCMS({
               disabled={loading}
               onChange={async (e) => {
                 const files = Array.from(e.target.files || []);
-                if (files.length === 0) return;
-
-                setLoading(true);
-                try {
-                  const urls = await Promise.all(files.map((f) => uploadToCloudinary(f)));
-                  const newImgs = urls
-                    .filter(Boolean)
-                    .map((u) => ({ id: Date.now() + Math.random(), url: u }));
-
-                  const updatedSlide = [...(slideImages || []), ...newImgs];
-                  setSlideImages?.(updatedSlide);
-
-                  const ok = await safeSync({ slideImages: updatedSlide });
-                  if (!ok) alert("배너 저장 실패(서버 동기화 오류) ❌");
-                } catch (err) {
-                  console.error(err);
-                  alert("배너 업로드/저장 오류");
-                } finally {
-                  setLoading(false);
-                  e.target.value = "";
-                }
+                e.target.value = "";
+                await addBanners(files);
               }}
             />
 
             <div style={cmsStyles.bannerList}>
-              {(slideImages || []).map((img) => (
+              {safeSlide.map((img) => (
                 <div key={img.id} style={cmsStyles.bannerThumb}>
                   <img src={img.url} alt="slide" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  <button
-                    onClick={async () => {
-                      if (loading) return;
-                      const filtered = (slideImages || []).filter((x) => x.id !== img.id);
-                      setSlideImages?.(filtered);
-                      const ok = await safeSync({ slideImages: filtered });
-                      if (!ok) alert("삭제 저장 실패(서버 동기화 오류) ❌");
-                    }}
-                    style={cmsStyles.bannerDelBtn}
-                  >
+                  <button onClick={() => deleteBanner(img.id)} style={cmsStyles.bannerDelBtn} disabled={loading}>
                     ✕
                   </button>
                 </div>
@@ -456,7 +532,7 @@ export default function AdminCMS({
           <label style={cmsStyles.sectionLabel}>❸ 컨텐츠 데이터 관리</label>
 
           <button onClick={() => setShowManagerModal(true)} style={cmsStyles.modalOpenBtn} disabled={loading}>
-            매니저 프로필 관리 ({(members || []).length}명)
+            매니저 프로필 관리 ({safeMembers.length}명)
           </button>
 
           <button
@@ -464,13 +540,11 @@ export default function AdminCMS({
             style={{ ...cmsStyles.modalOpenBtn, background: "#2196F3", marginTop: 10 }}
             disabled={loading}
           >
-            비디오 갤러리 관리 ({(videos || []).length}개)
+            비디오 갤러리 관리 ({safeVideos.length}개)
           </button>
 
           <button
-            onClick={() => {
-              if (isFn(openIndependent)) openIndependent();
-            }}
+            onClick={() => isFn(openIndependent) && openIndependent()}
             style={{ ...cmsStyles.modalOpenBtn, background: "#9C27B0", marginTop: 10 }}
             disabled={loading}
           >
@@ -506,11 +580,7 @@ export default function AdminCMS({
             />
           </div>
 
-          <button
-            onClick={handleSaveSystemSettings}
-            style={{ ...cmsStyles.modalOpenBtn, background: "#4CAF50", marginTop: 5 }}
-            disabled={loading}
-          >
+          <button onClick={handleSaveSystemSettings} style={{ ...cmsStyles.modalOpenBtn, background: "#4CAF50", marginTop: 5 }} disabled={loading}>
             시스템 설정 즉시저장
           </button>
         </div>
@@ -527,15 +597,16 @@ export default function AdminCMS({
             if (loading) return;
             setLoading(true);
             const timer = setTimeout(() => {
-              if (isFn(onExit)) onExit();
+              isFn(onExit) && onExit();
             }, 5000);
 
             try {
+              // saveToFirebase가 있으면 마지막 전체 저장도 수행
               if (isFn(saveToFirebase)) await saveToFirebase();
               clearTimeout(timer);
-              if (isFn(onExit)) onExit();
+              isFn(onExit) && onExit();
             } catch (err) {
-              if (isFn(onExit)) onExit();
+              isFn(onExit) && onExit();
             } finally {
               setLoading(false);
             }
@@ -558,6 +629,7 @@ export default function AdminCMS({
                   setNewM(initialMember);
                 }}
                 style={modalStyles.closeBtn}
+                disabled={loading}
               >
                 닫기
               </button>
@@ -565,7 +637,7 @@ export default function AdminCMS({
 
             <div style={modalStyles.formBox}>
               <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-                <select value={newM.region} onChange={(e) => handleRegionChange(e.target.value)} style={modalStyles.select}>
+                <select value={newM.region} onChange={(e) => handleRegionChange(e.target.value)} style={modalStyles.select} disabled={loading}>
                   {regions.map((r) => (
                     <option key={r} value={r}>
                       {r}
@@ -573,7 +645,7 @@ export default function AdminCMS({
                   ))}
                 </select>
 
-                <select value={newM.loc} onChange={(e) => setNewM({ ...newM, loc: e.target.value })} style={modalStyles.select}>
+                <select value={newM.loc} onChange={(e) => setNewM({ ...newM, loc: e.target.value })} style={modalStyles.select} disabled={loading}>
                   {regionData[newM.region].map((l) => (
                     <option key={l} value={l}>
                       {l}
@@ -587,35 +659,22 @@ export default function AdminCMS({
                   style={{ ...modalStyles.input, flex: 2 }}
                   placeholder="매니저 이름"
                   value={newM.name}
+                  disabled={loading}
                   onChange={(e) => setNewM({ ...newM, name: e.target.value })}
                 />
                 <input
                   style={{ ...modalStyles.input, flex: 1 }}
                   placeholder="나이"
                   value={newM.age}
+                  disabled={loading}
                   onChange={(e) => setNewM({ ...newM, age: e.target.value })}
                 />
               </div>
 
               <div style={{ display: "flex", gap: 8, marginBottom: 10, marginTop: 10 }}>
-                <input
-                  style={modalStyles.input}
-                  placeholder="키 (cm)"
-                  value={newM.height}
-                  onChange={(e) => setNewM({ ...newM, height: e.target.value })}
-                />
-                <input
-                  style={modalStyles.input}
-                  placeholder="몸무게 (kg)"
-                  value={newM.weight}
-                  onChange={(e) => setNewM({ ...newM, weight: e.target.value })}
-                />
-                <input
-                  style={modalStyles.input}
-                  placeholder="가슴 (컵)"
-                  value={newM.bust}
-                  onChange={(e) => setNewM({ ...newM, bust: e.target.value })}
-                />
+                <input style={modalStyles.input} placeholder="키 (cm)" value={newM.height} disabled={loading} onChange={(e) => setNewM({ ...newM, height: e.target.value })} />
+                <input style={modalStyles.input} placeholder="몸무게 (kg)" value={newM.weight} disabled={loading} onChange={(e) => setNewM({ ...newM, weight: e.target.value })} />
+                <input style={modalStyles.input} placeholder="가슴 (컵)" value={newM.bust} disabled={loading} onChange={(e) => setNewM({ ...newM, bust: e.target.value })} />
               </div>
 
               <div style={{ display: "flex", gap: 10, marginBottom: 10, marginTop: 10 }}>
@@ -638,7 +697,7 @@ export default function AdminCMS({
             </div>
 
             <div style={modalStyles.list}>
-              {(members || []).map((m) => (
+              {safeMembers.map((m) => (
                 <div key={m.id} style={modalStyles.listItem}>
                   <span>
                     [{m.loc}] {m.name} ({m.age ? m.age + "세" : "나이미정"})
@@ -647,19 +706,7 @@ export default function AdminCMS({
                     <button onClick={() => startEdit(m)} style={modalStyles.editBtn} disabled={loading}>
                       수정
                     </button>
-                    <button
-                      onClick={async () => {
-                        if (loading) return;
-                        if (confirm("삭제하시겠습니까?")) {
-                          const filtered = (members || []).filter((x) => x.id !== m.id);
-                          setMembers?.(filtered);
-                          const ok = await safeSync({ members: filtered });
-                          if (!ok) alert("삭제 저장 실패(서버 동기화 오류) ❌");
-                        }
-                      }}
-                      style={modalStyles.delBtn}
-                      disabled={loading}
-                    >
+                    <button onClick={() => deleteMember(m.id)} style={modalStyles.delBtn} disabled={loading}>
                       삭제
                     </button>
                   </div>
@@ -684,6 +731,7 @@ export default function AdminCMS({
                   setTempVideoUrl("");
                 }}
                 style={modalStyles.closeBtn}
+                disabled={loading}
               >
                 닫기
               </button>
@@ -716,25 +764,13 @@ export default function AdminCMS({
             </div>
 
             <div style={modalStyles.list}>
-              {(videos || []).map((v) => (
+              {safeVideos.map((v) => (
                 <div key={v.id} style={modalStyles.listItem}>
                   <video src={v.url} style={{ width: 60, height: 40, objectFit: "cover", borderRadius: 4 }} />
                   <div style={{ flex: 1, marginLeft: 10 }}>
                     <p style={{ fontSize: 10, color: "#888", margin: 0 }}>{v.description}</p>
                   </div>
-                  <button
-                    onClick={async () => {
-                      if (loading) return;
-                      if (confirm("삭제하시겠습니까?")) {
-                        const filtered = (videos || []).filter((x) => x.id !== v.id);
-                        setVideos?.(filtered);
-                        const ok = await safeSync({ videos: filtered });
-                        if (!ok) alert("삭제 저장 실패(서버 동기화 오류) ❌");
-                      }
-                    }}
-                    style={modalStyles.delBtn}
-                    disabled={loading}
-                  >
+                  <button onClick={() => deleteVideo(v.id)} style={modalStyles.delBtn} disabled={loading}>
                     삭제
                   </button>
                 </div>
@@ -747,6 +783,9 @@ export default function AdminCMS({
   );
 }
 
+/* =========================
+   Styles (원래 느낌 유지)
+========================= */
 const cmsStyles = {
   cms: {
     position: "fixed",
