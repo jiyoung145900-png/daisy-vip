@@ -36,7 +36,6 @@ export default function AdminCMS({
   telegramLink,
   setTelegramLink,
 
-  // 둘 중 하나만 있어도 동작하도록
   saveToFirebase,
   syncToFirebase,
 
@@ -70,6 +69,7 @@ export default function AdminCMS({
   const safeVideoURL = videoURL || "";
   const safeLogoPos = logoPos || { x: 20, y: 20 };
   const safeLogoSize = typeof logoSize === "number" ? logoSize : 50;
+
   const safeMembers = Array.isArray(members) ? members : [];
   const safeSlide = Array.isArray(slideImages) ? slideImages : [];
   const safeVideos = Array.isArray(videos) ? videos : [];
@@ -104,13 +104,11 @@ export default function AdminCMS({
   const isFn = (v) => typeof v === "function";
 
   /* =========================
-     1) "진짜 저장"을 위한 공통 저장 함수
-     - syncToFirebase 있으면 즉시 저장
-     - 없으면 실패로 처리(사용자에게 알려야 함)
+     1) 공통 저장 함수 (syncToFirebase 필수)
   ========================= */
   const safeSync = async (payload) => {
     if (!isFn(syncToFirebase)) {
-      alert("❌ 저장 함수(syncToFirebase)가 연결되지 않았습니다.\nApp.jsx에서 AdminCMS에 syncToFirebase props 전달 확인하세요.");
+      alert("❌ 저장 함수(syncToFirebase)가 연결되지 않았습니다.\nApp.jsx에서 AdminCMS props 전달 확인하세요.");
       return false;
     }
     try {
@@ -146,9 +144,9 @@ export default function AdminCMS({
   };
 
   /* =========================
-     3) 공통: 업로드 + 필요 시 즉시 저장
-     - heroImg, heroVid, logo, innerLogo 는 즉시 저장
-     - member/video 모달 업로드는 목록 추가 버튼에서 저장(원래 UX)
+     3) 업로드 + 필요 시 즉시 저장
+     - heroImg, heroVid, logo, innerLogo 즉시 저장
+     - member/video 모달 업로드는 목록 저장 버튼에서 저장(UX 유지)
   ========================= */
   const handleFileProcess = async (e, mode, callback) => {
     const file = e.target.files?.[0];
@@ -170,6 +168,8 @@ export default function AdminCMS({
       if (mode === "logo") updates = { logo: url };
       if (mode === "innerLogo") updates = { innerLogo: url };
       if (mode === "heroImg") updates = { hero: { ...safeHero, imageSrc: url, mode: "image" } };
+
+      // ✅ 핵심: heroVid 저장 누락 해결 (videoURL도 같이 저장)
       if (mode === "heroVid") updates = { videoURL: url, hero: { ...safeHero, mode: "video" } };
 
       if (updates) {
@@ -191,7 +191,10 @@ export default function AdminCMS({
   const handleSaveSystemSettings = async () => {
     if (loading) return;
     setLoading(true);
-    const ok = await safeSync({ telegramLink: telegramLink || "", adminPw: adminPw || "" });
+    const ok = await safeSync({
+      telegramLink: telegramLink || "",
+      adminPw: adminPw || "",
+    });
     setLoading(false);
     if (ok) alert("✅ 텔레그램/관리자 비밀번호가 서버에 저장되었습니다!");
     else alert("❌ 저장 실패(권한/네트워크 확인)");
@@ -258,7 +261,11 @@ export default function AdminCMS({
     const base = safeVideos;
 
     const next = editingVideoId
-      ? base.map((v) => (v.id === editingVideoId ? { ...v, url: tempVideoUrl, category: videoCategory, description: videoDesc } : v))
+      ? base.map((v) =>
+          v.id === editingVideoId
+            ? { ...v, url: tempVideoUrl, category: videoCategory, description: videoDesc }
+            : v
+        )
       : [...base, { id: Date.now(), url: tempVideoUrl, category: videoCategory, description: videoDesc }];
 
     setVideos?.(next);
@@ -343,6 +350,7 @@ export default function AdminCMS({
             border: adminPreviewMode === "landing" ? "2px solid #fff" : "none",
             opacity: loading ? 0.7 : 1,
           }}
+          disabled={loading}
         >
           ❶ 랜딩페이지 보기
         </button>
@@ -355,6 +363,7 @@ export default function AdminCMS({
             border: adminPreviewMode === "dashboard" ? "2px solid #fff" : "none",
             opacity: loading ? 0.7 : 1,
           }}
+          disabled={loading}
         >
           ❷ 홈페이지 보기
         </button>
@@ -406,7 +415,9 @@ export default function AdminCMS({
               accept="image/*"
               style={cmsStyles.fileInput}
               disabled={loading}
-              onChange={(e) => handleFileProcess(e, "heroImg", (url) => setHero?.({ ...safeHero, imageSrc: url, mode: "image" }))}
+              onChange={(e) =>
+                handleFileProcess(e, "heroImg", (url) => setHero?.({ ...safeHero, imageSrc: url, mode: "image" }))
+              }
             />
             {safeHero.imageSrc && (
               <img
@@ -441,7 +452,13 @@ export default function AdminCMS({
           <div style={cmsStyles.fieldGroup}>
             <label style={cmsStyles.fieldLabel}>중앙 메인 로고 및 위치</label>
 
-            <input type="file" accept="image/*" style={cmsStyles.fileInput} disabled={loading} onChange={(e) => handleFileProcess(e, "logo", setLogo)} />
+            <input
+              type="file"
+              accept="image/*"
+              style={cmsStyles.fileInput}
+              disabled={loading}
+              onChange={(e) => handleFileProcess(e, "logo", setLogo)}
+            />
 
             <div style={cmsStyles.rangeRow}>
               <span>크기: {safeLogoSize}px</span>
@@ -494,7 +511,13 @@ export default function AdminCMS({
 
           <div style={cmsStyles.fieldGroup}>
             <label style={cmsStyles.fieldLabel}>상단 고정 로고 (Inner Logo)</label>
-            <input type="file" accept="image/*" style={cmsStyles.fileInput} disabled={loading} onChange={(e) => handleFileProcess(e, "innerLogo", setInnerLogo)} />
+            <input
+              type="file"
+              accept="image/*"
+              style={cmsStyles.fileInput}
+              disabled={loading}
+              onChange={(e) => handleFileProcess(e, "innerLogo", setInnerLogo)}
+            />
             {innerLogo && <img src={innerLogo} style={{ maxHeight: 30, marginTop: 5 }} alt="inner-logo" />}
           </div>
 
@@ -580,7 +603,11 @@ export default function AdminCMS({
             />
           </div>
 
-          <button onClick={handleSaveSystemSettings} style={{ ...cmsStyles.modalOpenBtn, background: "#4CAF50", marginTop: 5 }} disabled={loading}>
+          <button
+            onClick={handleSaveSystemSettings}
+            style={{ ...cmsStyles.modalOpenBtn, background: "#4CAF50", marginTop: 5 }}
+            disabled={loading}
+          >
             시스템 설정 즉시저장
           </button>
         </div>
@@ -601,7 +628,6 @@ export default function AdminCMS({
             }, 5000);
 
             try {
-              // saveToFirebase가 있으면 마지막 전체 저장도 수행
               if (isFn(saveToFirebase)) await saveToFirebase();
               clearTimeout(timer);
               isFn(onExit) && onExit();
@@ -611,6 +637,7 @@ export default function AdminCMS({
               setLoading(false);
             }
           }}
+          disabled={loading}
         >
           {loading ? "데이터 저장 확인 중..." : "작업 종료 및 패널 닫기"}
         </button>
@@ -637,7 +664,12 @@ export default function AdminCMS({
 
             <div style={modalStyles.formBox}>
               <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-                <select value={newM.region} onChange={(e) => handleRegionChange(e.target.value)} style={modalStyles.select} disabled={loading}>
+                <select
+                  value={newM.region}
+                  onChange={(e) => handleRegionChange(e.target.value)}
+                  style={modalStyles.select}
+                  disabled={loading}
+                >
                   {regions.map((r) => (
                     <option key={r} value={r}>
                       {r}
@@ -645,7 +677,12 @@ export default function AdminCMS({
                   ))}
                 </select>
 
-                <select value={newM.loc} onChange={(e) => setNewM({ ...newM, loc: e.target.value })} style={modalStyles.select} disabled={loading}>
+                <select
+                  value={newM.loc}
+                  onChange={(e) => setNewM({ ...newM, loc: e.target.value })}
+                  style={modalStyles.select}
+                  disabled={loading}
+                >
                   {regionData[newM.region].map((l) => (
                     <option key={l} value={l}>
                       {l}
@@ -672,21 +709,49 @@ export default function AdminCMS({
               </div>
 
               <div style={{ display: "flex", gap: 8, marginBottom: 10, marginTop: 10 }}>
-                <input style={modalStyles.input} placeholder="키 (cm)" value={newM.height} disabled={loading} onChange={(e) => setNewM({ ...newM, height: e.target.value })} />
-                <input style={modalStyles.input} placeholder="몸무게 (kg)" value={newM.weight} disabled={loading} onChange={(e) => setNewM({ ...newM, weight: e.target.value })} />
-                <input style={modalStyles.input} placeholder="가슴 (컵)" value={newM.bust} disabled={loading} onChange={(e) => setNewM({ ...newM, bust: e.target.value })} />
+                <input
+                  style={modalStyles.input}
+                  placeholder="키 (cm)"
+                  value={newM.height}
+                  disabled={loading}
+                  onChange={(e) => setNewM({ ...newM, height: e.target.value })}
+                />
+                <input
+                  style={modalStyles.input}
+                  placeholder="몸무게 (kg)"
+                  value={newM.weight}
+                  disabled={loading}
+                  onChange={(e) => setNewM({ ...newM, weight: e.target.value })}
+                />
+                <input
+                  style={modalStyles.input}
+                  placeholder="가슴 (컵)"
+                  value={newM.bust}
+                  disabled={loading}
+                  onChange={(e) => setNewM({ ...newM, bust: e.target.value })}
+                />
               </div>
 
               <div style={{ display: "flex", gap: 10, marginBottom: 10, marginTop: 10 }}>
                 <div style={{ flex: 1 }}>
                   <p style={{ fontSize: 11, color: "#ffb347", margin: "0 0 5px 0" }}>사진 업로드</p>
-                  <input type="file" accept="image/*" disabled={loading} onChange={(e) => handleFileProcess(e, "image", (url) => setNewM({ ...newM, img: url }))} />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={loading}
+                    onChange={(e) => handleFileProcess(e, "image", (url) => setNewM({ ...newM, img: url }))}
+                  />
                   {newM.img && <img src={newM.img} style={modalStyles.previewImg} alt="p" />}
                 </div>
 
                 <div style={{ flex: 1 }}>
                   <p style={{ fontSize: 11, color: "#ffb347", margin: "0 0 5px 0" }}>영상 업로드</p>
-                  <input type="file" accept="video/*" disabled={loading} onChange={(e) => handleFileProcess(e, "video", (url) => setNewM({ ...newM, video: url }))} />
+                  <input
+                    type="file"
+                    accept="video/*"
+                    disabled={loading}
+                    onChange={(e) => handleFileProcess(e, "video", (url) => setNewM({ ...newM, video: url }))}
+                  />
                   {newM.video && <video src={newM.video} style={modalStyles.previewImg} controls />}
                 </div>
               </div>
@@ -738,7 +803,12 @@ export default function AdminCMS({
             </div>
 
             <div style={modalStyles.formBox}>
-              <select value={videoCategory} onChange={(e) => setVideoCategory(e.target.value)} style={modalStyles.select} disabled={loading}>
+              <select
+                value={videoCategory}
+                onChange={(e) => setVideoCategory(e.target.value)}
+                style={modalStyles.select}
+                disabled={loading}
+              >
                 {videoCategories.map((cat) => (
                   <option key={cat} value={cat}>
                     {cat}
@@ -754,11 +824,22 @@ export default function AdminCMS({
                 onChange={(e) => setVideoDesc(e.target.value)}
               />
 
-              <input type="file" accept="video/*" disabled={loading} onChange={(e) => handleFileProcess(e, "video", (url) => setTempVideoUrl(url))} />
+              <input
+                type="file"
+                accept="video/*"
+                disabled={loading}
+                onChange={(e) => handleFileProcess(e, "video", (url) => setTempVideoUrl(url))}
+              />
 
-              {tempVideoUrl && <video src={tempVideoUrl} style={{ width: "100%", maxHeight: 150, marginTop: 10 }} controls />}
+              {tempVideoUrl && (
+                <video src={tempVideoUrl} style={{ width: "100%", maxHeight: 150, marginTop: 10 }} controls />
+              )}
 
-              <button onClick={saveVideoToGallery} style={{ ...modalStyles.actionBtn, background: "#2196F3" }} disabled={loading}>
+              <button
+                onClick={saveVideoToGallery}
+                style={{ ...modalStyles.actionBtn, background: "#2196F3" }}
+                disabled={loading}
+              >
                 갤러리 반영
               </button>
             </div>
