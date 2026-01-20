@@ -256,7 +256,7 @@ export const AgentsView = ({
   newAgentCode,
   setNewAgentCode,
   addAgent,
-  deleteAgent, // ✅ Firestore 삭제 함수 (useAdminLogic에서 내려줘야 함)
+  deleteAgent,
 }) => (
   <div style={iaStyles.card}>
     <h1 style={iaStyles.bigTabTitle}>👔 실장 관리</h1>
@@ -283,9 +283,9 @@ export const AgentsView = ({
       </thead>
       <tbody>
         {agents.map(a => {
-          // Firestore 문서 id를 code로 쓰는 구조를 기본으로.
-          const code = (a.code || a.id || "").toString();
-          const myUsers = users.filter(u => (u.referral || "") === code);
+          // ✅ Firestore 문서 id = 코드 기준 (대문자 통일)
+          const code = String(a.id || a.code || "").toUpperCase();
+          const myUsers = users.filter(u => String(u.referral || "").toUpperCase() === code);
 
           return (
             <tr key={code} style={{ borderBottom: "1px solid #222" }}>
@@ -296,7 +296,7 @@ export const AgentsView = ({
                 {myUsers.map(u => u.id).join(", ")}
               </td>
               <td>
-                <button onClick={() => deleteAgent(code)} style={iaStyles.delBtn}>삭제</button>
+                <button onClick={() => deleteAgent?.(code)} style={iaStyles.delBtn}>삭제</button>
               </td>
             </tr>
           );
