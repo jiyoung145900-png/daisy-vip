@@ -4,9 +4,10 @@ import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
 /* =====================
    LANDING PAGE (완성형)
-   - Firestore 초대코드 가입
-   - 블랙화면 방지
-   - PC에서 과하게 큰 UI 자동 축소(반응형)
+   - Firestore 초대코드(어드민 생성)로 회원가입
+   - 초대코드 검증: invite_codes/{CODE} 또는 ADMIN
+   - onLogin/onGuestLogin 함수 방어 (d is not a function 방지)
+   - PC UI 과대 자동 축소(반응형)
 ===================== */
 export default function LandingPage({
   t,
@@ -120,16 +121,15 @@ export default function LandingPage({
     });
 
   // ---- 반응형(PC에서 너무 큰 문제 해결) ----
-  const [vw, setVw] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1200));
+  const [vw, setVw] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1200
+  );
   useEffect(() => {
     const onResize = () => setVw(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-
   const isDesktop = vw >= 1024;
-
-  // PC에서 자동 축소 (너무 큰 로딩/로그인 화면 해결)
   const scale = useMemo(() => (isDesktop ? 0.82 : 1), [isDesktop]);
 
   // ---- 상태 ----
@@ -137,74 +137,111 @@ export default function LandingPage({
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
   const [ref, setRef] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const toast = (ko, en) => alert(safeLang === "ko" ? ko : en);
+  const isFn = (v) => typeof v === "function";
+
+  // ---- 로그인/게스트 안전 호출 ----
+  const handleLogin = () => {
+    if (busy) return;
+    if (!isFn(onLogin)) {
+      toast("onLogin이 함수로 전달되지 않았습니다.", "onLogin is not a function.");
+      return;
+    }
+    onLogin(id, pw);
+  };
+
+  const handleGuest = () => {
+    if (busy) return;
+    if (!isFn(onGuestLogin)) {
+      toast(
+        "onGuestLogin이 함수로 전달되지 않았습니다.",
+        "onGuestLogin is not a function."
+      );
+      return;
+    }
+    onGuestLogin();
+  };
 
   // ---- 회원가입(Firestore 기반) ----
   const signup = async () => {
-    if (!id || !pw || !ref) {
-      return alert(safeLang === "ko" ? "모든 정보를 입력해주세요." : "Please fill all info.");
+    if (busy) return;
+
+    const newId = (id || "").trim();
+    const newPw = (pw || "").trim();
+    const inputRef = (ref || "").trim().toUpperCase();
+
+    if (!newId || !newPw || !inputRef) {
+      toast("모든 정보를 입력해주세요.", "Please fill all info.");
+      return;
     }
 
-    const newId = id.trim();
-    const newPw = pw.trim();
-    const inputRef = ref.trim().toUpperCase();
-
+    setBusy(true);
     try {
-      // 1) 초대코드(실장): invite_codes/{code}
+      // ✅ 추천코드는 “어드민이 만든 코드”만 인정: invite_codes/{CODE}
       const inviteSnap = await getDoc(doc(db, "invite_codes", inputRef));
 
-      // 2) 유저 추천코드: users/{id}
-      const userRefSnap = await getDoc(doc(db, "users", inputRef));
-
-      // 3) 마스터 코드
+      // ✅ 마스터 코드
       const isMaster = inputRef === "ADMIN";
 
-      if (!inviteSnap.exists() && !userRefSnap.exists() && !isMaster) {
-        return alert(safeLang === "ko" ? "존재하지 않거나 틀린 초대 코드입니다." : "Invalid referral code.");
+      if (!inviteSnap.exists() && !isMaster) {
+        toast("존재하지 않거나 틀린 초대 코드입니다.", "Invalid invitation code.");
+        return;
       }
 
       // 아이디 중복 체크
       const myUserRef = doc(db, "users", newId);
       const myUserSnap = await getDoc(myUserRef);
       if (myUserSnap.exists()) {
-        return alert(safeLang === "ko" ? "이미 존재하는 아이디입니다." : "ID already exists.");
+        toast("이미 존재하는 아이디입니다.", "ID already exists.");
+        return;
       }
 
-      const agentName = inviteSnap.exists() ? (inviteSnap.data()?.name || "") : "";
+      // invite_codes에 name 같은게 있으면 agentName으로 저장
+      const agentName = inviteSnap.exists() ? inviteSnap.data()?.name || "" : "";
       const generatedNo = String(Date.now());
 
       const newUser = {
         id: newId,
-        pw: newPw,         // 기존 호환
-        password: newPw,   // admin 호환
+        pw: newPw, // 기존 호환
+        password: newPw, // admin 호환
         no: generatedNo,
-        referral: inputRef,
+        referral: inputRef, // ✅ 가입에 사용된 초대코드
         diamond: 0,
-        refCode: newId,
+
+        // ✅ 내 추천코드(필요하면) = 내 아이디 대문자 통일
+        refCode: newId.toUpperCase(),
+
         agentName,
         joinedAt: new Date().toISOString(),
         createdAt: serverTimestamp(),
       };
 
-      // 가입은 새 문서 생성이 안전(merge X)
       await setDoc(myUserRef, newUser);
 
-      // 화면 즉시 반영(선택)
-      if (typeof setUsers === "function") setUsers([...(safeUsers || []), newUser]);
+      if (typeof setUsers === "function") {
+        setUsers([...(safeUsers || []), newUser]);
+      }
 
-      alert(safeLang === "ko" ? "성공적으로 가입되었습니다! 로그인해주세요." : "Signup Success! Please Login.");
-      setId(""); setPw(""); setRef("");
+      toast("성공적으로 가입되었습니다! 로그인해주세요.", "Signup Success! Please Login.");
+      setId("");
+      setPw("");
+      setRef("");
       setMode("login");
     } catch (e) {
-      console.error(e);
-      alert("회원가입 오류: " + (e?.message || e));
+      console.error("[signup] ERROR", e);
+      toast(`회원가입 오류: ${e?.message || e}`, `Signup error: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
     }
   };
 
   // ✅ Enter 키 처리
   const handleKeyDown = (e) => {
-    if (e.key === "Enter") {
-      mode === "login" ? onLogin?.(id, pw) : signup();
-    }
+    if (e.key !== "Enter") return;
+    if (mode === "login") handleLogin();
+    else signup();
   };
 
   return (
@@ -264,8 +301,8 @@ export default function LandingPage({
       <div
         style={{
           ...safeStyles.logoContainer,
-          left: `${(logoPos?.x ?? 20)}px`,
-          top: `${(logoPos?.y ?? 20)}px`,
+          left: `${logoPos?.x ?? 20}px`,
+          top: `${logoPos?.y ?? 20}px`,
           transition: "all 0.3s ease",
         }}
       >
@@ -274,7 +311,7 @@ export default function LandingPage({
             src={logo}
             alt="logo"
             style={{
-              height: `${(logoSize ?? 50)}px`,
+              height: `${logoSize ?? 50}px`,
               width: "auto",
               objectFit: "contain",
               filter: "drop-shadow(0 0 15px rgba(0,0,0,0.5))",
@@ -289,7 +326,12 @@ export default function LandingPage({
       <div style={safeStyles.mainContent}>
         <div style={{ width: "100%", maxWidth: 520 }}>
           <div style={safeStyles.heroSection}>
-            <h1 style={{ ...safeStyles.mainTitle, fontSize: isDesktop ? 30 : safeStyles.mainTitle.fontSize }}>
+            <h1
+              style={{
+                ...safeStyles.mainTitle,
+                fontSize: isDesktop ? 30 : safeStyles.mainTitle.fontSize,
+              }}
+            >
               {safeHero.title?.[safeLang] || "DAISY"}
             </h1>
             <p style={safeStyles.subTitle}>{safeHero.desc?.[safeLang] || ""}</p>
@@ -303,6 +345,7 @@ export default function LandingPage({
                   padding: isDesktop ? "34px 28px" : "50px 40px",
                   transform: `scale(${scale})`,
                   transformOrigin: "top center",
+                  opacity: busy ? 0.9 : 1,
                 }}
               >
                 <h2
@@ -326,6 +369,7 @@ export default function LandingPage({
                   value={id}
                   onChange={(e) => setId(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  disabled={busy}
                 />
 
                 <input
@@ -340,6 +384,7 @@ export default function LandingPage({
                   value={pw}
                   onChange={(e) => setPw(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  disabled={busy}
                 />
 
                 {mode === "signup" && (
@@ -352,10 +397,15 @@ export default function LandingPage({
                       border: "2px solid #ffb347",
                       background: "rgba(255,179,71,0.05)",
                     }}
-                    placeholder={safeLang === "ko" ? "초대 코드를 입력하세요" : "Enter Invitation Code"}
+                    placeholder={
+                      safeLang === "ko"
+                        ? "초대 코드를 입력하세요"
+                        : "Enter Invitation Code"
+                    }
                     value={ref}
                     onChange={(e) => setRef(e.target.value)}
                     onKeyDown={handleKeyDown}
+                    disabled={busy}
                   />
                 )}
 
@@ -366,10 +416,19 @@ export default function LandingPage({
                     fontSize: isDesktop ? "18px" : "20px",
                     fontWeight: "900",
                     marginTop: "6px",
+                    cursor: busy ? "wait" : "pointer",
+                    opacity: busy ? 0.85 : 1,
                   }}
-                  onClick={() => (mode === "login" ? onLogin?.(id, pw) : signup())}
+                  onClick={() => (mode === "login" ? handleLogin() : signup())}
+                  disabled={busy}
                 >
-                  {mode === "login" ? safeT.login : safeT.signup}
+                  {busy
+                    ? safeLang === "ko"
+                      ? "처리중..."
+                      : "Processing..."
+                    : mode === "login"
+                    ? safeT.login
+                    : safeT.signup}
                 </button>
 
                 {mode === "login" && (
@@ -378,8 +437,11 @@ export default function LandingPage({
                       ...safeStyles.guestBtn,
                       height: isDesktop ? "44px" : "55px",
                       marginTop: "12px",
+                      cursor: busy ? "not-allowed" : "pointer",
+                      opacity: busy ? 0.6 : 1,
                     }}
-                    onClick={onGuestLogin}
+                    onClick={handleGuest}
+                    disabled={busy}
                   >
                     {safeT.guest}
                   </button>
@@ -390,15 +452,24 @@ export default function LandingPage({
                     ...safeStyles.authToggle,
                     fontSize: isDesktop ? "13px" : "15px",
                     marginTop: isDesktop ? "18px" : "30px",
+                    pointerEvents: busy ? "none" : "auto",
+                    opacity: busy ? 0.6 : 0.85,
                   }}
                   onClick={() => {
+                    if (busy) return;
                     setMode(mode === "login" ? "signup" : "login");
-                    setId(""); setPw(""); setRef("");
+                    setId("");
+                    setPw("");
+                    setRef("");
                   }}
                 >
                   {mode === "login"
-                    ? (safeLang === "ko" ? "처음이신가요? 회원가입" : "New here? Sign Up")
-                    : (safeLang === "ko" ? "이미 계정이 있나요? 로그인" : "Have an account? Login")}
+                    ? safeLang === "ko"
+                      ? "처음이신가요? 회원가입"
+                      : "New here? Sign Up"
+                    : safeLang === "ko"
+                    ? "이미 계정이 있나요? 로그인"
+                    : "Have an account? Login"}
                 </div>
               </div>
             </div>
