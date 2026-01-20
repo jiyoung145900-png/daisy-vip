@@ -1,12 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 import { db } from "./firebase";
-import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  limit,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from "firebase/firestore";
 
 /* =====================
    LANDING PAGE (완성형)
    - Firestore 초대코드 가입
-   - 블랙화면 방지
-   - PC에서 과하게 큰 UI 자동 축소(반응형)
+   - 초대코드 타입 지원:
+     1) invite_codes/{CODE} (실장코드)
+     2) users where refCode == CODE (유저 추천코드)
+     3) ADMIN
+   - 블랙화면 방지(필수 props 누락 대비)
+   - PC에서 UI 과대 문제 자동 축소(반응형)
 ===================== */
 export default function LandingPage({
   t,
@@ -23,7 +37,7 @@ export default function LandingPage({
   styles,
   isAdmin,
 }) {
-  // ---- 안전 기본값(크래시 방지) ----
+  /* ---------- 안전 기본값(크래시 방지) ---------- */
   const safeLang = lang || "ko";
   const safeT = t || {
     login: "로그인",
@@ -32,12 +46,14 @@ export default function LandingPage({
     pw: "비밀번호",
     guest: "게스트",
   };
+
   const safeHero = hero || {
     mode: "image",
     imageSrc: "",
     title: { ko: "DAISY", en: "DAISY" },
     desc: { ko: "", en: "" },
   };
+
   const safeUsers = Array.isArray(users) ? users : [];
 
   const safeStyles =
@@ -119,8 +135,11 @@ export default function LandingPage({
       },
     });
 
-  // ---- 반응형(PC에서 너무 큰 문제 해결) ----
-  const [vw, setVw] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1200));
+  /* ---------- PC에서 너무 크게 보이는 문제 해결 ---------- */
+  const [vw, setVw] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1200
+  );
+
   useEffect(() => {
     const onResize = () => setVw(window.innerWidth);
     window.addEventListener("resize", onResize);
@@ -129,17 +148,74 @@ export default function LandingPage({
 
   const isDesktop = vw >= 1024;
 
-  // PC에서 자동 축소 (너무 큰 로딩/로그인 화면 해결)
-  const scale = useMemo(() => (isDesktop ? 0.82 : 1), [isDesktop]);
+  // ✅ scale만 줄이면 일부는 여전히 커 보일 수 있어서 폭/패딩도 같이 조정
+  const ui = useMemo(() => {
+    if (!isDesktop) {
+      return {
+        scale: 1,
+        cardPadding: "50px 40px",
+        titleSize: "28px",
+        inputH: "60px",
+        inputF: "18px",
+        btnH: "65px",
+        btnF: "20px",
+        guestH: "55px",
+        toggleF: "15px",
+        maxWidth: 520,
+      };
+    }
+    return {
+      scale: 0.86,
+      cardPadding: "34px 28px",
+      titleSize: "22px",
+      inputH: "48px",
+      inputF: "16px",
+      btnH: "52px",
+      btnF: "18px",
+      guestH: "44px",
+      toggleF: "13px",
+      maxWidth: 520,
+    };
+  }, [isDesktop]);
 
-  // ---- 상태 ----
+  /* ---------- 상태 ---------- */
   const [mode, setMode] = useState("login");
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
   const [ref, setRef] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  // ---- 회원가입(Firestore 기반) ----
+  /* ---------- 초대코드 검증 함수 ---------- */
+  const validateInvite = async (codeUpper) => {
+    // 1) 실장코드: invite_codes/{CODE}
+    const inviteSnap = await getDoc(doc(db, "invite_codes", codeUpper));
+    if (inviteSnap.exists()) {
+      return { ok: true, type: "agent", agentName: inviteSnap.data()?.name || "" };
+    }
+
+    // 2) 유저 추천코드: users where refCode == CODE
+    const qRef = query(
+      collection(db, "users"),
+      where("refCode", "==", codeUpper),
+      limit(1)
+    );
+    const refSnap = await getDocs(qRef);
+    if (!refSnap.empty) {
+      return { ok: true, type: "user", agentName: "" };
+    }
+
+    // 3) 마스터
+    if (codeUpper === "ADMIN") {
+      return { ok: true, type: "master", agentName: "" };
+    }
+
+    return { ok: false };
+  };
+
+  /* ---------- 회원가입(Firestore 기반) ---------- */
   const signup = async () => {
+    if (busy) return;
+
     if (!id || !pw || !ref) {
       return alert(safeLang === "ko" ? "모든 정보를 입력해주세요." : "Please fill all info.");
     }
@@ -148,28 +224,28 @@ export default function LandingPage({
     const newPw = pw.trim();
     const inputRef = ref.trim().toUpperCase();
 
+    if (!newId || !newPw || !inputRef) {
+      return alert(safeLang === "ko" ? "공백 없이 입력해주세요." : "Please remove spaces.");
+    }
+
     try {
-      // 1) 초대코드(실장): invite_codes/{code}
-      const inviteSnap = await getDoc(doc(db, "invite_codes", inputRef));
+      setBusy(true);
 
-      // 2) 유저 추천코드: users/{id}
-      const userRefSnap = await getDoc(doc(db, "users", inputRef));
-
-      // 3) 마스터 코드
-      const isMaster = inputRef === "ADMIN";
-
-      if (!inviteSnap.exists() && !userRefSnap.exists() && !isMaster) {
-        return alert(safeLang === "ko" ? "존재하지 않거나 틀린 초대 코드입니다." : "Invalid referral code.");
+      // ✅ 초대코드 검증
+      const inviteRes = await validateInvite(inputRef);
+      if (!inviteRes.ok) {
+        return alert(
+          safeLang === "ko" ? "존재하지 않거나 틀린 초대 코드입니다." : "Invalid referral code."
+        );
       }
 
-      // 아이디 중복 체크
+      // ✅ 아이디 중복 체크 (Firestore 기준)
       const myUserRef = doc(db, "users", newId);
       const myUserSnap = await getDoc(myUserRef);
       if (myUserSnap.exists()) {
         return alert(safeLang === "ko" ? "이미 존재하는 아이디입니다." : "ID already exists.");
       }
 
-      const agentName = inviteSnap.exists() ? (inviteSnap.data()?.name || "") : "";
       const generatedNo = String(Date.now());
 
       const newUser = {
@@ -177,33 +253,40 @@ export default function LandingPage({
         pw: newPw,         // 기존 호환
         password: newPw,   // admin 호환
         no: generatedNo,
-        referral: inputRef,
+        referral: inputRef, // 추천인/실장 코드
         diamond: 0,
-        refCode: newId,
-        agentName,
+        refCode: newId,     // ✅ 내 추천코드 = 내 아이디
+        agentName: inviteRes.agentName || "",
         joinedAt: new Date().toISOString(),
         createdAt: serverTimestamp(),
       };
 
-      // 가입은 새 문서 생성이 안전(merge X)
+      // ✅ 가입은 새 문서 생성이 안전
       await setDoc(myUserRef, newUser);
 
-      // 화면 즉시 반영(선택)
-      if (typeof setUsers === "function") setUsers([...(safeUsers || []), newUser]);
+      // ✅ 화면 즉시 반영(선택)
+      if (typeof setUsers === "function") {
+        setUsers([...(safeUsers || []), newUser]);
+      }
 
       alert(safeLang === "ko" ? "성공적으로 가입되었습니다! 로그인해주세요." : "Signup Success! Please Login.");
-      setId(""); setPw(""); setRef("");
+      setId("");
+      setPw("");
+      setRef("");
       setMode("login");
     } catch (e) {
       console.error(e);
       alert("회원가입 오류: " + (e?.message || e));
+    } finally {
+      setBusy(false);
     }
   };
 
-  // ✅ Enter 키 처리
+  /* ---------- Enter 키 ---------- */
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
-      mode === "login" ? onLogin?.(id, pw) : signup();
+      if (mode === "login") onLogin?.(id, pw);
+      else signup();
     }
   };
 
@@ -287,7 +370,7 @@ export default function LandingPage({
 
       {/* 3) 메인 */}
       <div style={safeStyles.mainContent}>
-        <div style={{ width: "100%", maxWidth: 520 }}>
+        <div style={{ width: "100%", maxWidth: ui.maxWidth }}>
           <div style={safeStyles.heroSection}>
             <h1 style={{ ...safeStyles.mainTitle, fontSize: isDesktop ? 30 : safeStyles.mainTitle.fontSize }}>
               {safeHero.title?.[safeLang] || "DAISY"}
@@ -300,54 +383,51 @@ export default function LandingPage({
               <div
                 style={{
                   ...safeStyles.authCard,
-                  padding: isDesktop ? "34px 28px" : "50px 40px",
-                  transform: `scale(${scale})`,
+                  padding: ui.cardPadding,
+                  transform: `scale(${ui.scale})`,
                   transformOrigin: "top center",
+                  opacity: busy ? 0.9 : 1,
                 }}
               >
-                <h2
-                  style={{
-                    ...safeStyles.authTitle,
-                    fontSize: isDesktop ? "22px" : "28px",
-                    marginBottom: isDesktop ? "22px" : "35px",
-                  }}
-                >
+                <h2 style={{ ...safeStyles.authTitle, fontSize: ui.titleSize, marginBottom: isDesktop ? 22 : 35 }}>
                   {mode === "login" ? safeT.login : safeT.signup}
                 </h2>
 
                 <input
                   style={{
                     ...safeStyles.authInput,
-                    height: isDesktop ? "48px" : "60px",
-                    fontSize: isDesktop ? "16px" : "18px",
+                    height: ui.inputH,
+                    fontSize: ui.inputF,
                     marginBottom: "16px",
                   }}
                   placeholder={safeT.id}
                   value={id}
                   onChange={(e) => setId(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  disabled={busy}
                 />
 
                 <input
                   type="password"
                   style={{
                     ...safeStyles.authInput,
-                    height: isDesktop ? "48px" : "60px",
-                    fontSize: isDesktop ? "16px" : "18px",
+                    height: ui.inputH,
+                    fontSize: ui.inputF,
                     marginBottom: "16px",
                   }}
                   placeholder={safeT.pw}
                   value={pw}
                   onChange={(e) => setPw(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  disabled={busy}
                 />
 
                 {mode === "signup" && (
                   <input
                     style={{
                       ...safeStyles.authInput,
-                      height: isDesktop ? "48px" : "60px",
-                      fontSize: isDesktop ? "16px" : "18px",
+                      height: ui.inputH,
+                      fontSize: ui.inputF,
                       marginBottom: "16px",
                       border: "2px solid #ffb347",
                       background: "rgba(255,179,71,0.05)",
@@ -356,30 +436,37 @@ export default function LandingPage({
                     value={ref}
                     onChange={(e) => setRef(e.target.value)}
                     onKeyDown={handleKeyDown}
+                    disabled={busy}
                   />
                 )}
 
                 <button
                   style={{
                     ...safeStyles.primaryBtn,
-                    height: isDesktop ? "52px" : "65px",
-                    fontSize: isDesktop ? "18px" : "20px",
+                    height: ui.btnH,
+                    fontSize: ui.btnF,
                     fontWeight: "900",
                     marginTop: "6px",
+                    cursor: busy ? "wait" : "pointer",
+                    opacity: busy ? 0.8 : 1,
                   }}
                   onClick={() => (mode === "login" ? onLogin?.(id, pw) : signup())}
+                  disabled={busy}
                 >
-                  {mode === "login" ? safeT.login : safeT.signup}
+                  {busy ? (safeLang === "ko" ? "처리중..." : "Processing...") : mode === "login" ? safeT.login : safeT.signup}
                 </button>
 
                 {mode === "login" && (
                   <button
                     style={{
                       ...safeStyles.guestBtn,
-                      height: isDesktop ? "44px" : "55px",
+                      height: ui.guestH,
                       marginTop: "12px",
+                      opacity: busy ? 0.6 : 1,
+                      cursor: busy ? "not-allowed" : "pointer",
                     }}
                     onClick={onGuestLogin}
+                    disabled={busy}
                   >
                     {safeT.guest}
                   </button>
@@ -388,17 +475,25 @@ export default function LandingPage({
                 <div
                   style={{
                     ...safeStyles.authToggle,
-                    fontSize: isDesktop ? "13px" : "15px",
+                    fontSize: ui.toggleF,
                     marginTop: isDesktop ? "18px" : "30px",
+                    pointerEvents: busy ? "none" : "auto",
+                    opacity: busy ? 0.6 : 0.85,
                   }}
                   onClick={() => {
                     setMode(mode === "login" ? "signup" : "login");
-                    setId(""); setPw(""); setRef("");
+                    setId("");
+                    setPw("");
+                    setRef("");
                   }}
                 >
                   {mode === "login"
-                    ? (safeLang === "ko" ? "처음이신가요? 회원가입" : "New here? Sign Up")
-                    : (safeLang === "ko" ? "이미 계정이 있나요? 로그인" : "Have an account? Login")}
+                    ? safeLang === "ko"
+                      ? "처음이신가요? 회원가입"
+                      : "New here? Sign Up"
+                    : safeLang === "ko"
+                    ? "이미 계정이 있나요? 로그인"
+                    : "Have an account? Login"}
                 </div>
               </div>
             </div>
