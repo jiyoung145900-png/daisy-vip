@@ -2,12 +2,6 @@ import { useEffect, useState } from "react";
 import { db } from "./firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
-/* =====================
-   LANDING PAGE (완성형)
-   - Firestore 초대코드 가입
-   - 블랙화면 방지
-   - PC에서 과하게 큰 UI 자동 축소(반응형)
-===================== */
 export default function LandingPage({
   t,
   lang,
@@ -69,7 +63,7 @@ export default function LandingPage({
         paddingLeft: 16,
         paddingRight: 16,
       },
-      heroSection: { textAlign: "center", marginBottom: 30 },
+      heroSection: { textAlign: "center", marginBottom: 22 },
       mainTitle: { fontSize: 34, fontWeight: 900 },
       subTitle: { opacity: 0.8 },
 
@@ -119,11 +113,10 @@ export default function LandingPage({
       },
     });
 
-  // ---- 반응형(PC에서 너무 큰 문제 해결) ----
+  // ---- 반응형(PC/모바일 구분) ----
   const [vw, setVw] = useState(() =>
     typeof window !== "undefined" ? window.innerWidth : 1200
   );
-
   useEffect(() => {
     const onResize = () => setVw(window.innerWidth);
     window.addEventListener("resize", onResize);
@@ -132,8 +125,19 @@ export default function LandingPage({
 
   const isDesktop = vw >= 1024;
 
-  // ✅ PC에서 페이지 전체를 자연스럽게 축소
-  const pageScale = isDesktop ? 0.82 : 1;
+  // ✅ 핵심: PC일 때만 “숫자 자체”를 작게 씀 (scale 트릭 없음)
+  const ui = {
+    padding: isDesktop ? "26px 22px" : "50px 40px",
+    titleSize: isDesktop ? 22 : 28,
+    mainTitleSize: isDesktop ? 26 : safeStyles.mainTitle.fontSize,
+    inputH: isDesktop ? 44 : 60,
+    btnH: isDesktop ? 48 : 65,
+    guestH: isDesktop ? 40 : 55,
+    topPad: isDesktop ? 110 : safeStyles.mainContent.paddingTop,
+    inputFont: isDesktop ? 15 : 18,
+    btnFont: isDesktop ? 16 : 20,
+    toggleFont: isDesktop ? 13 : 15,
+  };
 
   // ---- 상태 ----
   const [mode, setMode] = useState("login");
@@ -154,13 +158,8 @@ export default function LandingPage({
     const inputRef = ref.trim().toUpperCase();
 
     try {
-      // 1) 초대코드(실장): invite_codes/{code}
       const inviteSnap = await getDoc(doc(db, "invite_codes", inputRef));
-
-      // 2) 유저 추천코드: users/{id}
       const userRefSnap = await getDoc(doc(db, "users", inputRef));
-
-      // 3) 마스터 코드
       const isMaster = inputRef === "ADMIN";
 
       if (!inviteSnap.exists() && !userRefSnap.exists() && !isMaster) {
@@ -171,7 +170,6 @@ export default function LandingPage({
         );
       }
 
-      // 아이디 중복 체크
       const myUserRef = doc(db, "users", newId);
       const myUserSnap = await getDoc(myUserRef);
       if (myUserSnap.exists()) {
@@ -185,8 +183,8 @@ export default function LandingPage({
 
       const newUser = {
         id: newId,
-        pw: newPw, // 기존 호환
-        password: newPw, // admin 호환
+        pw: newPw,
+        password: newPw,
         no: generatedNo,
         referral: inputRef,
         diamond: 0,
@@ -196,10 +194,7 @@ export default function LandingPage({
         createdAt: serverTimestamp(),
       };
 
-      // 가입은 새 문서 생성이 안전(merge X)
       await setDoc(myUserRef, newUser);
-
-      // 화면 즉시 반영(선택)
       if (typeof setUsers === "function") setUsers([...(safeUsers || []), newUser]);
 
       alert(
@@ -217,7 +212,6 @@ export default function LandingPage({
     }
   };
 
-  // ✅ Enter 키 처리
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
       mode === "login" ? onLogin?.(id, pw) : signup();
@@ -225,14 +219,8 @@ export default function LandingPage({
   };
 
   return (
-    <div
-      style={{
-        ...safeStyles.landingWrapper,
-        minHeight: "100dvh",
-        position: "relative",
-      }}
-    >
-      {/* 1) 배경 */}
+    <div style={{ ...safeStyles.landingWrapper, minHeight: "100dvh" }}>
+      {/* 배경 */}
       <div
         style={{
           ...safeStyles.bgWrap,
@@ -268,16 +256,12 @@ export default function LandingPage({
             muted
             loop
             playsInline
-            style={{
-              ...safeStyles.bgVideo,
-              height: "100dvh",
-              objectFit: "cover",
-            }}
+            style={{ ...safeStyles.bgVideo, height: "100dvh", objectFit: "cover" }}
           />
         )}
       </div>
 
-      {/* 2) 로고 */}
+      {/* 로고 */}
       <div
         style={{
           ...safeStyles.logoContainer,
@@ -291,7 +275,7 @@ export default function LandingPage({
             src={logo}
             alt="logo"
             style={{
-              height: `${logoSize ?? 50}px`,
+              height: `${Math.round((logoSize ?? 50) * (isDesktop ? 0.85 : 1))}px`,
               width: "auto",
               objectFit: "contain",
               filter: "drop-shadow(0 0 15px rgba(0,0,0,0.5))",
@@ -302,23 +286,16 @@ export default function LandingPage({
         )}
       </div>
 
-      {/* 3) 메인 (✅ PC에서 전체 축소 적용) */}
+      {/* 메인 */}
       <div
         style={{
           ...safeStyles.mainContent,
-          paddingTop: isDesktop ? 110 : safeStyles.mainContent.paddingTop,
-          transform: pageScale !== 1 ? `scale(${pageScale})` : "none",
-          transformOrigin: "top center",
+          paddingTop: ui.topPad,
         }}
       >
         <div style={{ width: "100%", maxWidth: 520 }}>
           <div style={safeStyles.heroSection}>
-            <h1
-              style={{
-                ...safeStyles.mainTitle,
-                fontSize: isDesktop ? 26 : safeStyles.mainTitle.fontSize,
-              }}
-            >
+            <h1 style={{ ...safeStyles.mainTitle, fontSize: ui.mainTitleSize }}>
               {safeHero.title?.[safeLang] || "DAISY"}
             </h1>
             <p style={safeStyles.subTitle}>{safeHero.desc?.[safeLang] || ""}</p>
@@ -326,28 +303,17 @@ export default function LandingPage({
 
           {!isAdmin && (
             <div style={safeStyles.authWrap}>
-              <div
-                style={{
-                  ...safeStyles.authCard,
-                  padding: isDesktop ? "34px 28px" : "50px 40px",
-                }}
-              >
-                <h2
-                  style={{
-                    ...safeStyles.authTitle,
-                    fontSize: isDesktop ? "22px" : "28px",
-                    marginBottom: isDesktop ? "22px" : "35px",
-                  }}
-                >
+              <div style={{ ...safeStyles.authCard, padding: ui.padding }}>
+                <h2 style={{ ...safeStyles.authTitle, fontSize: ui.titleSize, marginBottom: 18 }}>
                   {mode === "login" ? safeT.login : safeT.signup}
                 </h2>
 
                 <input
                   style={{
                     ...safeStyles.authInput,
-                    height: isDesktop ? "48px" : "60px",
-                    fontSize: isDesktop ? "16px" : "18px",
-                    marginBottom: "16px",
+                    height: ui.inputH,
+                    fontSize: ui.inputFont,
+                    marginBottom: 14,
                   }}
                   placeholder={safeT.id}
                   value={id}
@@ -359,9 +325,9 @@ export default function LandingPage({
                   type="password"
                   style={{
                     ...safeStyles.authInput,
-                    height: isDesktop ? "48px" : "60px",
-                    fontSize: isDesktop ? "16px" : "18px",
-                    marginBottom: "16px",
+                    height: ui.inputH,
+                    fontSize: ui.inputFont,
+                    marginBottom: 14,
                   }}
                   placeholder={safeT.pw}
                   value={pw}
@@ -373,17 +339,13 @@ export default function LandingPage({
                   <input
                     style={{
                       ...safeStyles.authInput,
-                      height: isDesktop ? "48px" : "60px",
-                      fontSize: isDesktop ? "16px" : "18px",
-                      marginBottom: "16px",
+                      height: ui.inputH,
+                      fontSize: ui.inputFont,
+                      marginBottom: 14,
                       border: "2px solid #ffb347",
                       background: "rgba(255,179,71,0.05)",
                     }}
-                    placeholder={
-                      safeLang === "ko"
-                        ? "초대 코드를 입력하세요"
-                        : "Enter Invitation Code"
-                    }
+                    placeholder={safeLang === "ko" ? "초대 코드를 입력하세요" : "Enter Invitation Code"}
                     value={ref}
                     onChange={(e) => setRef(e.target.value)}
                     onKeyDown={handleKeyDown}
@@ -393,10 +355,9 @@ export default function LandingPage({
                 <button
                   style={{
                     ...safeStyles.primaryBtn,
-                    height: isDesktop ? "52px" : "65px",
-                    fontSize: isDesktop ? "18px" : "20px",
-                    fontWeight: "900",
-                    marginTop: "6px",
+                    height: ui.btnH,
+                    fontSize: ui.btnFont,
+                    marginTop: 6,
                   }}
                   onClick={() => (mode === "login" ? onLogin?.(id, pw) : signup())}
                 >
@@ -407,8 +368,8 @@ export default function LandingPage({
                   <button
                     style={{
                       ...safeStyles.guestBtn,
-                      height: isDesktop ? "44px" : "55px",
-                      marginTop: "12px",
+                      height: ui.guestH,
+                      marginTop: 10,
                     }}
                     onClick={onGuestLogin}
                   >
@@ -419,8 +380,8 @@ export default function LandingPage({
                 <div
                   style={{
                     ...safeStyles.authToggle,
-                    fontSize: isDesktop ? "13px" : "15px",
-                    marginTop: isDesktop ? "18px" : "30px",
+                    fontSize: ui.toggleFont,
+                    marginTop: 14,
                   }}
                   onClick={() => {
                     setMode(mode === "login" ? "signup" : "login");
