@@ -14,16 +14,12 @@ import {
 } from "firebase/firestore";
 
 /* =====================
-   LANDING PAGE (초대코드 “진짜로” 먹히는 완성형)
-   - 초대코드 검증 우선순위:
-      1) invite_codes/{CODE} (문서ID=CODE)
-      2) invite_codes where code == CODE (자동ID 케이스)
-      3) settings/global 안의 inviteCodes(또는 invite_codes 등)에서 찾기 (폴백)
-   - ✅ Firestore 실제 필드 used/active 둘 다 호환
-   - ✅ 가입 성공 시 invite_codes.used = true 업데이트(가능할 때)
-   - ✅ usedCount + lastUsedAt도 같이 기록(가능할 때)
-   - ✅ 권한 오류/네트워크 오류 메시지 분리
-   - ✅ UI scale 축소 제거(원하면 아래 scale만 다시 바꾸면 됨)
+   LANDING PAGE (초대코드 완성형)
+   초대코드 검증 우선순위:
+   1) invite_codes/{CODE} (문서ID=CODE)
+   2) invite_codes where code == CODE (자동ID 케이스)
+   3) settings/global 안의 inviteCodes(또는 invite_codes 등)에서 찾기
+   + used/active 둘 다 대응 (used:true면 막기, active:false면 막기)
 ===================== */
 
 export default function LandingPage({
@@ -41,21 +37,9 @@ export default function LandingPage({
   styles,
   isAdmin,
 }) {
-  // ---- 안전 기본값(크래시 방지) ----
   const safeLang = lang || "ko";
-  const safeT = t || {
-    login: "로그인",
-    signup: "회원가입",
-    id: "아이디",
-    pw: "비밀번호",
-    guest: "게스트",
-  };
-  const safeHero = hero || {
-    mode: "image",
-    imageSrc: "",
-    title: { ko: "DAISY", en: "DAISY" },
-    desc: { ko: "", en: "" },
-  };
+  const safeT = t || { login: "로그인", signup: "회원가입", id: "아이디", pw: "비밀번호", guest: "게스트" };
+  const safeHero = hero || { mode: "image", imageSrc: "", title: { ko: "DAISY", en: "DAISY" }, desc: { ko: "", en: "" } };
   const safeUsers = Array.isArray(users) ? users : [];
 
   const safeStyles =
@@ -65,61 +49,25 @@ export default function LandingPage({
       bgWrap: {},
       bgOverlay: { position: "absolute", inset: 0, background: "rgba(0,0,0,0.45)" },
       bgVideo: { position: "absolute", inset: 0, width: "100%" },
+
       logoContainer: { position: "absolute", left: 20, top: 20, zIndex: 2 },
       defaultLogo: { fontSize: 24, fontWeight: 900 },
-      mainContent: {
-        position: "relative",
-        zIndex: 2,
-        display: "flex",
-        justifyContent: "center",
-        paddingTop: 140,
-        paddingLeft: 16,
-        paddingRight: 16,
-      },
+
+      mainContent: { position: "relative", zIndex: 2, display: "flex", justifyContent: "center", paddingTop: 140, paddingLeft: 16, paddingRight: 16 },
       heroSection: { textAlign: "center", marginBottom: 30 },
       mainTitle: { fontSize: 34, fontWeight: 900 },
       subTitle: { opacity: 0.8 },
+
       authWrap: { display: "flex", justifyContent: "center" },
-      authCard: {
-        width: 420,
-        maxWidth: "92vw",
-        background: "rgba(0,0,0,0.55)",
-        border: "1px solid #333",
-        borderRadius: 16,
-        backdropFilter: "blur(6px)",
-      },
+      authCard: { width: 420, maxWidth: "92vw", background: "rgba(0,0,0,0.55)", border: "1px solid #333", borderRadius: 16, backdropFilter: "blur(6px)" },
       authTitle: { fontWeight: 900 },
-      authInput: {
-        width: "100%",
-        padding: 14,
-        borderRadius: 10,
-        border: "1px solid #333",
-        background: "#111",
-        color: "#fff",
-        outline: "none",
-      },
-      primaryBtn: {
-        width: "100%",
-        padding: 16,
-        borderRadius: 12,
-        border: "none",
-        background: "#ffb347",
-        fontWeight: 900,
-        cursor: "pointer",
-      },
-      guestBtn: {
-        width: "100%",
-        padding: 14,
-        borderRadius: 12,
-        border: "1px solid #333",
-        background: "#111",
-        color: "#fff",
-        cursor: "pointer",
-      },
+      authInput: { width: "100%", padding: 14, borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff", outline: "none" },
+      primaryBtn: { width: "100%", padding: 16, borderRadius: 12, border: "none", background: "#ffb347", fontWeight: 900, cursor: "pointer" },
+      guestBtn: { width: "100%", padding: 14, borderRadius: 12, border: "1px solid #333", background: "#111", color: "#fff", cursor: "pointer" },
       authToggle: { marginTop: 16, cursor: "pointer", opacity: 0.85, textAlign: "center", userSelect: "none" },
     });
 
-  // ---- 반응형 ----
+  // 반응형 (너가 “축소 싫다” 해서 scale 고정 1)
   const [vw, setVw] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1200));
   useEffect(() => {
     const onResize = () => setVw(window.innerWidth);
@@ -127,11 +75,9 @@ export default function LandingPage({
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const isDesktop = vw >= 1024;
-
-  // ✅ 축소 제거 (원하면 0.82 등으로 다시 변경)
   const scale = 1;
 
-  // ---- 상태 ----
+  // 상태
   const [mode, setMode] = useState("login");
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
@@ -153,34 +99,34 @@ export default function LandingPage({
     onGuestLogin();
   };
 
-  // ✅ settings/global 안에서 inviteCodes 찾기 (배열/맵/필드명 여러 케이스 대응)
+  // settings/global 안에서 inviteCodes 찾기 (배열/맵/필드명 여러 케이스 대응)
   const fetchInviteFromSettings = async (CODE) => {
     const snap = await getDoc(doc(db, "settings", "global"));
-    if (!snap.exists()) return { ok: false, via: "settings:none", data: null, docRef: null };
+    if (!snap.exists()) return { ok: false, via: "settings:none", data: null };
 
     const g = snap.data() || {};
     const candidates = [g.inviteCodes, g.invite_codes, g.invites, g.refCodes, g.ref_codes].filter(Boolean);
 
-    // 배열 케이스
+    // 배열: [{code:"112233", ...}]
     for (const c of candidates) {
       if (Array.isArray(c)) {
         const hit = c.find((x) => String(x?.code || x?.id || x?.key || "").toUpperCase() === CODE);
-        if (hit) return { ok: true, via: "settings:array", data: hit, docRef: null };
+        if (hit) return { ok: true, via: "settings:array", data: hit };
       }
     }
 
-    // 맵 케이스
+    // 맵: {"112233": {...}}
     for (const c of candidates) {
       if (c && typeof c === "object" && !Array.isArray(c)) {
         const hit = c[CODE];
-        if (hit) return { ok: true, via: "settings:map", data: hit, docRef: null };
+        if (hit) return { ok: true, via: "settings:map", data: hit };
       }
     }
 
-    return { ok: false, via: "settings:miss", data: null, docRef: null };
+    return { ok: false, via: "settings:miss", data: null };
   };
 
-  // ✅ 초대코드 조회(3중 폴백)
+  // 초대코드 조회 (3중 폴백)
   const fetchInvite = async (CODE) => {
     // 1) invite_codes/{CODE}
     const refDoc = doc(db, "invite_codes", CODE);
@@ -202,20 +148,6 @@ export default function LandingPage({
     return { ok: false, docRef: null, data: null, via: "none" };
   };
 
-  // ✅ 초대코드 상태 판정 (used/active 혼재 호환)
-  const isInviteDisabled = (data) => {
-    // 1) active === false (있으면 이게 최우선)
-    if (data?.active === false) return true;
-
-    // 2) used === true (네 프로젝트 실제 구조)
-    if (data?.used === true) return true;
-
-    // 3) status === "disabled" 같은 커스텀도 혹시 있을 수 있어서(있으면 막기)
-    if (String(data?.status || "").toLowerCase() === "disabled") return true;
-
-    return false;
-  };
-
   const signup = async () => {
     if (busy) return;
 
@@ -230,8 +162,6 @@ export default function LandingPage({
       const isMaster = inputRef === "ADMIN";
 
       let invite = null;
-
-      // ✅ 초대코드는 반드시 있어야 가입 (ADMIN 제외)
       if (!isMaster) {
         invite = await fetchInvite(inputRef);
         console.log("[INVITE CHECK]", inputRef, invite?.via, invite);
@@ -241,13 +171,18 @@ export default function LandingPage({
           return;
         }
 
-        if (isInviteDisabled(invite.data)) {
-          toast("이미 사용되었거나 비활성화된 초대 코드입니다.", "This invitation code is already used/disabled.");
+        // used / active 둘 다 체크 (네 문서에 used:false 있음)
+        if (invite.data?.active === false) {
+          toast("비활성화된 초대 코드입니다.", "This invitation code is disabled.");
+          return;
+        }
+        if (invite.data?.used === true) {
+          toast("이미 사용된 초대 코드입니다.", "This invitation code was already used.");
           return;
         }
       }
 
-      // 아이디 중복 체크
+      // 아이디 중복
       const myUserRef = doc(db, "users", newId);
       const myUserSnap = await getDoc(myUserRef);
       if (myUserSnap.exists()) return toast("이미 존재하는 아이디입니다.", "ID already exists.");
@@ -268,18 +203,16 @@ export default function LandingPage({
         createdAt: serverTimestamp(),
       };
 
-      // ✅ 유저 생성
       await setDoc(myUserRef, newUser);
 
-      // ✅ 초대코드 업데이트 (invite_codes 문서가 있을 때만 시도)
-      // - 권한 막혀도 가입은 유지 (try/catch)
+      // invite_codes 문서가 실제 존재할 때만 업데이트 시도
       if (invite?.docRef) {
         try {
           await updateDoc(invite.docRef, {
-            used: true, // ✅ 핵심: 네 실제 필드
-            usedAt: serverTimestamp(),
             usedCount: increment(1),
             lastUsedAt: serverTimestamp(),
+            // 단발코드로 쓰고 싶으면 이거도 켜 (원치 않으면 주석)
+            // used: true,
           });
         } catch (e) {
           console.warn("[invite update] skipped:", e?.message || e);
@@ -299,8 +232,8 @@ export default function LandingPage({
 
       if (msg.includes("Missing or insufficient permissions")) {
         toast(
-          "권한 문제로 초대코드를 읽거나/업데이트 못하고 있습니다. Firebase Rules에서 invite_codes 읽기/쓰기 허용 필요",
-          "Permission issue: check Firestore Rules for invite_codes."
+          "초대코드 확인 권한이 없습니다. (Firebase Rules에서 invite_codes 읽기 허용 필요)",
+          "No permission to read invite code. Check Firebase Rules."
         );
         return;
       }
@@ -322,6 +255,7 @@ export default function LandingPage({
       {/* 배경 */}
       <div style={{ ...safeStyles.bgWrap, minHeight: "100dvh", position: "absolute", inset: 0, overflow: "hidden" }}>
         <div style={safeStyles.bgOverlay} />
+
         {safeHero.mode === "image" && safeHero.imageSrc && (
           <img
             src={safeHero.imageSrc}
@@ -330,6 +264,7 @@ export default function LandingPage({
             style={{ position: "absolute", inset: 0, width: "100%", height: "100dvh", objectFit: "cover", zIndex: -1 }}
           />
         )}
+
         {safeHero.mode === "video" && videoURL && (
           <video
             key={videoURL}
@@ -346,7 +281,11 @@ export default function LandingPage({
       {/* 로고 */}
       <div style={{ ...safeStyles.logoContainer, left: `${logoPos?.x ?? 20}px`, top: `${logoPos?.y ?? 20}px`, transition: "all 0.3s ease" }}>
         {logo ? (
-          <img src={logo} alt="logo" style={{ height: `${logoSize ?? 50}px`, width: "auto", objectFit: "contain", filter: "drop-shadow(0 0 15px rgba(0,0,0,0.5))" }} />
+          <img
+            src={logo}
+            alt="logo"
+            style={{ height: `${logoSize ?? 50}px`, width: "auto", objectFit: "contain", filter: "drop-shadow(0 0 15px rgba(0,0,0,0.5))" }}
+          />
         ) : (
           <strong style={safeStyles.defaultLogo}>DAISY</strong>
         )}

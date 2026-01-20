@@ -29,7 +29,7 @@ const save = (k, v) => {
     if (v === undefined) return;
     localStorage.setItem(k, JSON.stringify(v));
   } catch (e) {
-    if (e.name === "QuotaExceededError") alert("Storage quota exceeded! Please reduce image sizes.");
+    if (e?.name === "QuotaExceededError") alert("Storage quota exceeded! Please reduce image sizes.");
   }
 };
 
@@ -73,6 +73,7 @@ const translations = {
 };
 
 export default function App() {
+  // --- Base State ---
   const [lang, setLang] = useState(() => load("lang", "ko"));
   const [loggedIn, setLoggedIn] = useState(() => load("loggedIn", false));
   const [isAdmin, setIsAdmin] = useState(() => load("isAdmin", false));
@@ -84,13 +85,13 @@ export default function App() {
   const [appAvatarIdx, setAppAvatarIdx] = useState(0);
   const [isIndependentAdmin, setIsIndependentAdmin] = useState(false);
 
-  // Password Management
+  // Passwords
   const [adminPw, setAdminPw] = useState(() => load("adminPw", "123456"));
   const [gamePw, setGamePw] = useState(() => load("gamePw", "1234"));
 
+  // Global Settings
   const [telegramLink, setTelegramLink] = useState(() => load("telegramLink", "https://t.me/DAISY_CORE_OFFICIAL"));
   const [showPopup, setShowPopup] = useState(true);
-  const [showPopupAdmin, setShowPopupAdmin] = useState(false);
 
   const [members, setMembers] = useState(() => load("members", []));
   const [slideImages, setSlideImages] = useState(() => load("slideImages", []));
@@ -112,42 +113,47 @@ export default function App() {
   const [adminPreviewMode, setAdminPreviewMode] = useState("dashboard");
   const t = useMemo(() => translations[lang] || translations.ko, [lang]);
 
-  // ✅ Firebase Realtime Listener (빈 배열/0도 반영되게 수정)
+  // ===== 핵심: settings/global 스냅샷 (빈 배열/0/빈문자도 반영되게) =====
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "settings", "global"), (docSnap) => {
       if (!docSnap.exists()) return;
       const data = docSnap.data() || {};
 
+      // 객체류
       if (data.hero !== undefined) setHero(data.hero);
 
+      // 스칼라/문자열/숫자류 (undefined만 거른다)
       if (data.videoURL !== undefined) setVideoURL(data.videoURL);
       if (data.logo !== undefined) setLogo(data.logo);
       if (data.logoSize !== undefined) setLogoSize(data.logoSize);
       if (data.logoPos !== undefined) setLogoPos(data.logoPos);
+      if (data.innerLogo !== undefined) setInnerLogo(data.innerLogo);
+      if (data.telegramLink !== undefined) setTelegramLink(data.telegramLink);
 
-      // ✅ 배열은 빈 배열도 반영되게 "!== undefined"로
+      // 배열류 (빈 배열도 무조건 반영)
       if (data.members !== undefined) setMembers(Array.isArray(data.members) ? data.members : []);
       if (data.slideImages !== undefined) setSlideImages(Array.isArray(data.slideImages) ? data.slideImages : []);
       if (data.videos !== undefined) setVideos(Array.isArray(data.videos) ? data.videos : []);
       if (data.users !== undefined) setUsers(Array.isArray(data.users) ? data.users : []);
 
-      if (data.innerLogo !== undefined) setInnerLogo(data.innerLogo);
-
-      // ✅ 비번 필드명 통합: adminPassword 우선, 없으면 adminPw
+      // 비번 필드명 혼재 대응: adminPassword 우선, 없으면 adminPw
       const nextAdminPw = data.adminPassword ?? data.adminPw;
       if (nextAdminPw !== undefined) setAdminPw(nextAdminPw);
 
       if (data.gamePw !== undefined) setGamePw(data.gamePw);
-      if (data.telegramLink !== undefined) setTelegramLink(data.telegramLink);
     });
 
     return () => unsub();
   }, []);
 
-  // ✅ Sync Function (merge:true + adminPassword/adminPw 동시 저장)
-  const syncToFirebase = async (updates) => {
+  // ===== 핵심: 서버 저장 (merge:true로 기존 필드 날리지 않게) =====
+  const syncToFirebase = async (updates = {}) => {
     try {
+      const nextAdminPw = updates.adminPassword ?? updates.adminPw ?? adminPw;
+      const nextGamePw = updates.gamePw ?? gamePw;
+
       const finalData = {
+        // 화면/컨텐츠
         hero,
         videoURL,
         logo,
@@ -160,12 +166,12 @@ export default function App() {
         telegramLink,
         users,
 
-        // ✅ 서버에 둘 다 써서 호환 유지
-        adminPassword: updates?.adminPw ?? updates?.adminPassword ?? adminPw,
-        adminPw: updates?.adminPw ?? updates?.adminPassword ?? adminPw,
+        // 비번은 둘 다 저장(호환)
+        adminPassword: nextAdminPw,
+        adminPw: nextAdminPw,
+        gamePw: nextGamePw,
 
-        gamePw: updates?.gamePw ?? gamePw,
-
+        // 업데이트 오버레이
         ...updates,
       };
 
@@ -178,13 +184,16 @@ export default function App() {
     }
   };
 
-  const saveToFirebase = async () => {
-    return await syncToFirebase({});
-  };
+  const saveToFirebase = async () => syncToFirebase({});
 
+  // ===== 유저 포인트/추천코드 sync (브로드캐스트 호환 유지) =====
   const syncUpdate = useCallback((targetId, newPoint, newRefCode, newReferral) => {
-    setUsers((prev) => prev.map((u) => (u.id === targetId ? { ...u, diamond: newPoint, refCode: newRefCode, referral: newReferral } : u)));
-    setCurrentUser((prev) => (prev?.id === targetId ? { ...prev, diamond: newPoint, refCode: newRefCode, referral: newReferral } : prev));
+    setUsers((prev) =>
+      prev.map((u) => (u.id === targetId ? { ...u, diamond: newPoint, refCode: newRefCode, referral: newReferral } : u))
+    );
+    setCurrentUser((prev) =>
+      prev?.id === targetId ? { ...prev, diamond: newPoint, refCode: newRefCode, referral: newReferral } : prev
+    );
   }, []);
 
   useEffect(() => {
@@ -194,14 +203,17 @@ export default function App() {
         syncUpdate(userId, point, refCode, referral);
       }
     };
+
     const handleLocalUpdate = (e) => {
       const { userId, point, refCode, referral } = e.detail || {};
       if (userId) syncUpdate(userId, point, refCode, referral);
     };
+
     window.addEventListener("user_point_update", handleLocalUpdate);
     return () => window.removeEventListener("user_point_update", handleLocalUpdate);
   }, [syncUpdate]);
 
+  // ===== LocalStorage 자동 저장 =====
   useEffect(() => {
     save("lang", lang);
     save("loggedIn", loggedIn);
@@ -223,9 +235,28 @@ export default function App() {
     save("adminPw", adminPw);
     save("gamePw", gamePw);
     save("telegramLink", telegramLink);
-  }, [lang, loggedIn, isAdmin, isGuest, users, currentUser, hero, logo, logoSize, logoPos, members, slideImages, videoURL, videos, innerLogo, adminPw, gamePw, telegramLink]);
+  }, [
+    lang,
+    loggedIn,
+    isAdmin,
+    isGuest,
+    users,
+    currentUser,
+    hero,
+    logo,
+    logoSize,
+    logoPos,
+    members,
+    slideImages,
+    videoURL,
+    videos,
+    innerLogo,
+    adminPw,
+    gamePw,
+    telegramLink,
+  ]);
 
-  // ✅ 로그인: adminPassword/adminPw 둘 다 읽게 수정
+  // ===== 로그인 (서버 비번을 항상 최신으로 읽고 체크) =====
   const handleLoginAction = async (id, pw) => {
     let serverAdminPw = adminPw;
     let serverGamePw = gamePw;
@@ -236,6 +267,7 @@ export default function App() {
         const data = snap.data() || {};
         serverAdminPw = data.adminPassword ?? data.adminPw ?? serverAdminPw;
         serverGamePw = data.gamePw ?? serverGamePw;
+
         setAdminPw(serverAdminPw);
         setGamePw(serverGamePw);
       }
@@ -243,26 +275,32 @@ export default function App() {
       console.error("서버 비밀번호 확인 실패", e);
     }
 
+    // 게임 관리자
     if (id === "game") {
       if (pw === serverGamePw) {
         setIsIndependentAdmin(true);
         setLoggedIn(true);
         return;
-      } else return alert("게임 관리자 비밀번호가 틀립니다.");
+      }
+      return alert("게임 관리자 비밀번호가 틀립니다.");
     }
 
-    if (id === "admin") {
+    // 디자인 관리자
+    if (id === ADMIN_ID) {
       if (pw === serverAdminPw) {
         setIsAdmin(true);
         setLoggedIn(true);
-        setCurrentUser({ id: "admin", no: "000001", diamond: 999999, rewards: 0, refCode: "MASTER" });
+        setCurrentUser({ id: ADMIN_ID, no: "000001", diamond: 999999, rewards: 0, refCode: "MASTER" });
         setAdminPreviewMode("dashboard");
         return;
-      } else return alert("디자인 관리자 비밀번호가 틀립니다.");
+      }
+      return alert("디자인 관리자 비밀번호가 틀립니다.");
     }
 
-    const u = users.find((u) => u.id === id && u.pw === pw);
+    // 일반 유저
+    const u = (Array.isArray(users) ? users : []).find((u) => u?.id === id && u?.pw === pw);
     if (!u) return alert(lang === "ko" ? "로그인 정보가 틀립니다." : "Login Failed");
+
     setCurrentUser({ ...u });
     setLoggedIn(true);
     setIsGuest(false);
@@ -281,6 +319,7 @@ export default function App() {
     setAppAvatarIdx(newIdx);
   };
 
+  // 독립관리자 화면
   if (isIndependentAdmin) {
     return <IndependentAdmin users={users} setUsers={setUsers} onExit={handleLogout} />;
   }
@@ -397,7 +436,7 @@ export default function App() {
   );
 }
 
-/* ====== 아래 styles/dashStyles는 네 원본 그대로 ====== */
+/* ====== styles/dashStyles (네 원본 유지) ====== */
 const styles = {
   app: { width: "100%", background: "#000", fontFamily: "'Inter', sans-serif", color: "#fff", position: "relative" },
   bgWrap: { position: "fixed", inset: 0, zIndex: 0 },
@@ -425,37 +464,9 @@ const styles = {
 };
 
 const dashStyles = {
-  container: {
-    position: "relative",
-    zIndex: 10,
-    width: "100%",
-    maxWidth: 500,
-    margin: "0 auto",
-    background: "#000",
-    height: "100vh",
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-  },
-  contentArea: {
-    flex: 1,
-    overflowY: "auto",
-    paddingBottom: 20,
-    WebkitOverflowScrolling: "touch",
-  },
-  bottomNav: {
-    position: "relative",
-    width: "100%",
-    maxWidth: 500,
-    height: 80,
-    background: "rgba(20,20,20,0.95)",
-    display: "flex",
-    justifyContent: "space-around",
-    alignItems: "center",
-    borderTop: "1px solid #222",
-    backdropFilter: "blur(10px)",
-    flexShrink: 0,
-  },
+  container: { position: "relative", zIndex: 10, width: "100%", maxWidth: 500, margin: "0 auto", background: "#000", height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden" },
+  contentArea: { flex: 1, overflowY: "auto", paddingBottom: 20, WebkitOverflowScrolling: "touch" },
+  bottomNav: { position: "relative", width: "100%", maxWidth: 500, height: 80, background: "rgba(20,20,20,0.95)", display: "flex", justifyContent: "space-around", alignItems: "center", borderTop: "1px solid #222", backdropFilter: "blur(10px)", flexShrink: 0 },
   navItem: { display: "flex", flexDirection: "column", alignItems: "center", cursor: "pointer", transition: "all 0.2s" },
   logoutBtn: { padding: "12px 30px", borderRadius: 15, background: "rgba(255,45,85,0.1)", color: "#ff2d55", border: "1px solid #ff2d55", fontWeight: 700, cursor: "pointer" },
 };
