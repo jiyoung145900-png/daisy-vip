@@ -1,11 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 import { db } from "./firebase";
-import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+  collection,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  increment,
+} from "firebase/firestore";
 
 /* =====================
    LANDING PAGE (완성형)
    - Firestore 초대코드(어드민 생성)로 회원가입
-   - 초대코드 검증: invite_codes/{CODE} 또는 ADMIN
+   - 초대코드 검증:
+      1) invite_codes/{CODE} (문서ID=CODE)
+      2) (백업) invite_codes where code == CODE (자동ID 저장 케이스 대응)
+      3) ADMIN 마스터 코드
+   - 권한 오류(Missing permissions) 구분 메시지
    - onLogin/onGuestLogin 함수 방어 (d is not a function 방지)
    - PC UI 과대 자동 축소(반응형)
 ===================== */
@@ -164,6 +179,26 @@ export default function LandingPage({
     onGuestLogin();
   };
 
+  // ✅ 초대코드 조회(문서ID 우선, 없으면 where code== 로 백업)
+  const fetchInvite = async (CODE) => {
+    // 1) 문서ID로 조회
+    const refDoc = doc(db, "invite_codes", CODE);
+    const snap = await getDoc(refDoc);
+    if (snap.exists()) {
+      return { ok: true, docRef: refDoc, data: snap.data(), via: "docId" };
+    }
+
+    // 2) 자동ID 저장 케이스: code 필드로 조회
+    const q = query(collection(db, "invite_codes"), where("code", "==", CODE));
+    const qs = await getDocs(q);
+    if (!qs.empty) {
+      const first = qs.docs[0];
+      return { ok: true, docRef: first.ref, data: first.data(), via: "query" };
+    }
+
+    return { ok: false, docRef: null, data: null, via: "none" };
+  };
+
   // ---- 회원가입(Firestore 기반) ----
   const signup = async () => {
     if (busy) return;
@@ -179,15 +214,22 @@ export default function LandingPage({
 
     setBusy(true);
     try {
-      // ✅ 추천코드는 “어드민이 만든 코드”만 인정: invite_codes/{CODE}
-      const inviteSnap = await getDoc(doc(db, "invite_codes", inputRef));
-
-      // ✅ 마스터 코드
       const isMaster = inputRef === "ADMIN";
 
-      if (!inviteSnap.exists() && !isMaster) {
-        toast("존재하지 않거나 틀린 초대 코드입니다.", "Invalid invitation code.");
-        return;
+      // ✅ 초대코드 검증 (반드시 존재해야 가입)
+      let invite = null;
+      if (!isMaster) {
+        invite = await fetchInvite(inputRef);
+        if (!invite.ok) {
+          toast("존재하지 않거나 틀린 초대 코드입니다.", "Invalid invitation code.");
+          return;
+        }
+
+        // active 필드가 있으면 비활성 코드 막기 (없으면 통과)
+        if (invite.data?.active === false) {
+          toast("비활성화된 초대 코드입니다.", "This invitation code is disabled.");
+          return;
+        }
       }
 
       // 아이디 중복 체크
@@ -198,20 +240,17 @@ export default function LandingPage({
         return;
       }
 
-      // invite_codes에 name 같은게 있으면 agentName으로 저장
-      const agentName = inviteSnap.exists() ? inviteSnap.data()?.name || "" : "";
+      const agentName = invite?.data?.name || "";
       const generatedNo = String(Date.now());
 
       const newUser = {
         id: newId,
-        pw: newPw, // 기존 호환
-        password: newPw, // admin 호환
+        pw: newPw,          // 기존 호환
+        password: newPw,    // admin 호환
         no: generatedNo,
-        referral: inputRef, // ✅ 가입에 사용된 초대코드
+        referral: inputRef, // ✅ 가입에 사용된 초대코드(ADMIN 포함)
         diamond: 0,
-
-        // ✅ 내 추천코드(필요하면) = 내 아이디 대문자 통일
-        refCode: newId.toUpperCase(),
+        refCode: newId.toUpperCase(), // 내 추천코드(기본)
 
         agentName,
         joinedAt: new Date().toISOString(),
@@ -219,6 +258,20 @@ export default function LandingPage({
       };
 
       await setDoc(myUserRef, newUser);
+
+      // ✅ 초대코드 사용 카운트 기록(선택)
+      // (Rules에서 update 허용되어야 함. 막혀있으면 실패해도 가입은 유지)
+      if (invite?.docRef) {
+        try {
+          await updateDoc(invite.docRef, {
+            usedCount: increment(1),
+            lastUsedAt: serverTimestamp(),
+          });
+        } catch (e) {
+          // 권한 없으면 무시(가입 자체는 성공)
+          console.warn("[invite update] skipped:", e?.message || e);
+        }
+      }
 
       if (typeof setUsers === "function") {
         setUsers([...(safeUsers || []), newUser]);
@@ -231,7 +284,17 @@ export default function LandingPage({
       setMode("login");
     } catch (e) {
       console.error("[signup] ERROR", e);
-      toast(`회원가입 오류: ${e?.message || e}`, `Signup error: ${e?.message || e}`);
+
+      const msg = String(e?.message || e);
+      if (msg.includes("Missing or insufficient permissions")) {
+        toast(
+          "초대코드 확인 권한이 없습니다. (Firebase Rules에서 invite_codes 읽기 허용 필요)",
+          "No permission to read invite code. Check Firebase Rules (allow read invite_codes)."
+        );
+        return;
+      }
+
+      toast(`회원가입 오류: ${msg}`, `Signup error: ${msg}`);
     } finally {
       setBusy(false);
     }
@@ -397,11 +460,7 @@ export default function LandingPage({
                       border: "2px solid #ffb347",
                       background: "rgba(255,179,71,0.05)",
                     }}
-                    placeholder={
-                      safeLang === "ko"
-                        ? "초대 코드를 입력하세요"
-                        : "Enter Invitation Code"
-                    }
+                    placeholder={safeLang === "ko" ? "초대 코드를 입력하세요" : "Enter Invitation Code"}
                     value={ref}
                     onChange={(e) => setRef(e.target.value)}
                     onKeyDown={handleKeyDown}
