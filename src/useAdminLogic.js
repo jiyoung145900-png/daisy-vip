@@ -1,14 +1,15 @@
 import { useState, useEffect, useMemo } from "react";
-import { db } from "./firebase"; 
-import { 
-  doc, setDoc, deleteDoc, collection, onSnapshot, 
-  query, orderBy, limit, updateDoc, getDoc, addDoc 
+import { db } from "./firebase";
+import {
+  doc, setDoc, deleteDoc, collection, onSnapshot,
+  query, orderBy, limit, updateDoc, getDoc, addDoc,
+  serverTimestamp
 } from "firebase/firestore";
 
 const CONFIG = {
-  ROUND_DURATION: 65, 
-  BASE_ROUND: 1824231, 
-  START_TIME: new Date("2024-01-01T00:00:00Z").getTime(), 
+  ROUND_DURATION: 65,
+  BASE_ROUND: 1824231,
+  START_TIME: new Date("2024-01-01T00:00:00Z").getTime(),
 };
 
 export const useAdminLogic = (initialUsers, setInitialUsers) => {
@@ -16,14 +17,15 @@ export const useAdminLogic = (initialUsers, setInitialUsers) => {
 
   const [currentInfo, setCurrentInfo] = useState({ currentRound: 0, timeLeft: 0, isDrawing: false });
   const [targetRound, setTargetRound] = useState(0);
-  const [queue, setQueue] = useState({}); 
+  const [queue, setQueue] = useState({});
   const [gameHistory, setGameHistory] = useState([]);
-  const [sponsorships, setSponsorships] = useState([]); 
-  
+  const [sponsorships, setSponsorships] = useState([]);
+
   const [depositRequests, setDepositRequests] = useState([]);
   const [withdrawRequests, setWithdrawRequests] = useState([]);
   const [financeHistory, setFinanceHistory] = useState([]);
 
+  // 🔥 실장 / 총판
   const [agents, setAgents] = useState([]);
   const [newAgentName, setNewAgentName] = useState("");
   const [newAgentCode, setNewAgentCode] = useState("");
@@ -33,233 +35,161 @@ export const useAdminLogic = (initialUsers, setInitialUsers) => {
     return users.filter(u => u.lastActive && (now - u.lastActive < 60000));
   }, [users]);
 
-  // 안전한 저장을 위한 헬퍼
-  const saveGlobalUsers = async (updatedUsers) => {
-    try {
-        const cleanUsers = JSON.parse(JSON.stringify(updatedUsers));
-        await setDoc(doc(db, "settings", "global"), { users: cleanUsers }, { merge: true });
-    } catch(e) { console.log("백업 저장 실패"); }
-  };
-
-  // ★ [핵심 추가] 기존 로컬 데이터를 Firebase로 자동 업로드 (1회성 복구)
+  /* ------------------------------------------------------------------ */
+  /* 실시간 리스너 통합 */
+  /* ------------------------------------------------------------------ */
   useEffect(() => {
-    const syncLocalToFirebase = async () => {
-      const localData = JSON.parse(localStorage.getItem("users") || "[]");
-      if (localData.length === 0) return;
 
-      // console.log("🔄 로컬 데이터 DB 동기화 시작...", localData.length);
-      
-      // 로컬에 있는 유저들을 하나씩 DB에 확인 후 없으면 업로드
-      for (const u of localData) {
-        if (u.id) {
-          try {
-            const userRef = doc(db, "users", u.id);
-            const userSnap = await getDoc(userRef);
-            if (!userSnap.exists()) {
-              // DB에 없으면 로컬 데이터로 생성
-              await setDoc(userRef, u, { merge: true });
-              // console.log(`✅ [${u.id}] DB 업로드 완료`);
-            }
-          } catch (e) {
-            console.error("동기화 실패:", e);
-          }
-        }
-      }
-    };
-    
-    syncLocalToFirebase();
-  }, []);
-
-  // --- ★ [핵심] 리스너 통합 (실시간 감시) ---
-  useEffect(() => {
-    
-    // 1. 유저 데이터 실시간 감시 (다이아 변동 즉시 반영)
-    const unsubUsers = onSnapshot(collection(db, "users"), (snap) => {
-        const userList = snap.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-        }));
-        
-        // 데이터가 있으면 상태 업데이트
-        if (userList.length > 0) {
-            // 최근 접속순 정렬
-            userList.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
-            setUsers(userList);
-            if (setInitialUsers) setInitialUsers(userList);
-        }
+    // 유저
+    const unsubUsers = onSnapshot(collection(db, "users"), snap => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+      setUsers(list);
+      if (setInitialUsers) setInitialUsers(list);
     });
 
-    // 2. 조작 대기열 리스너
-    const unsubQueue = onSnapshot(collection(db, "event_manipulation"), (snap) => {
-      const q = {}; 
-      snap.forEach(doc => {
-          q[doc.id] = doc.data().winner || doc.data().items; 
-      });
+    // 결과 조작
+    const unsubQueue = onSnapshot(collection(db, "event_manipulation"), snap => {
+      const q = {};
+      snap.forEach(d => q[d.id] = d.data().winner);
       setQueue(q);
     });
 
-    // 3. 베팅 내역 리스너
-    const unsubBets = onSnapshot(query(collection(db, "event_bets"), orderBy("round", "desc"), limit(100)), (snap) => {
-      const bets = []; snap.forEach(doc => bets.push({ id: doc.id, ...doc.data() }));
-      if (bets.length > 0) setSponsorships(bets);
+    // 베팅
+    const unsubBets = onSnapshot(
+      query(collection(db, "event_bets"), orderBy("round", "desc"), limit(100)),
+      snap => setSponsorships(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    );
+
+    // 입금
+    const unsubDep = onSnapshot(
+      query(collection(db, "deposit_requests"), orderBy("timestamp", "desc")),
+      snap => setDepositRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    );
+
+    // 출금
+    const unsubWdr = onSnapshot(
+      query(collection(db, "withdraw_requests"), orderBy("timestamp", "desc")),
+      snap => setWithdrawRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    );
+
+    // 금융 기록
+    const unsubFin = onSnapshot(
+      query(collection(db, "finance_history"), orderBy("completedAt", "desc"), limit(50)),
+      snap => setFinanceHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    );
+
+    // 🔥 실장 초대코드 리스너 (핵심)
+    const unsubAgents = onSnapshot(collection(db, "invite_codes"), snap => {
+      setAgents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    // 4. 입금 요청 리스너
-    const unsubDep = onSnapshot(query(collection(db, "deposit_requests"), orderBy("timestamp", "desc")), (snap) => {
-      const reqs = []; snap.forEach(doc => reqs.push({ id: doc.id, ...doc.data() })); 
-      setDepositRequests(reqs);
-    });
-
-    // 5. 출금 요청 리스너
-    const unsubWdr = onSnapshot(query(collection(db, "withdraw_requests"), orderBy("timestamp", "desc")), (snap) => {
-      const reqs = []; snap.forEach(doc => reqs.push({ id: doc.id, ...doc.data() })); 
-      setWithdrawRequests(reqs);
-    });
-
-    // 6. 금융 기록 리스너
-    const unsubFin = onSnapshot(query(collection(db, "finance_history"), orderBy("completedAt", "desc"), limit(50)), (snap) => {
-      const logs = []; snap.forEach(doc => logs.push({ id: doc.id, ...doc.data() })); 
-      setFinanceHistory(logs);
-    });
-
-    setAgents(JSON.parse(localStorage.getItem("daisy_agents") || "[]"));
-    const gHistory = JSON.parse(localStorage.getItem("event_total_history") || "[]");
-    setGameHistory(gHistory.sort((a, b) => b.round - a.round));
-
+    // 회차 타이머
     const syncTimer = setInterval(() => {
-      const now = Date.now();
-      const elapsed = now - CONFIG.START_TIME;
+      const elapsed = Date.now() - CONFIG.START_TIME;
       const round = CONFIG.BASE_ROUND + Math.floor(elapsed / (CONFIG.ROUND_DURATION * 1000));
-      const remainingMs = (CONFIG.ROUND_DURATION * 1000) - (elapsed % (CONFIG.ROUND_DURATION * 1000));
-      let timeLeft = Math.floor(remainingMs / 1000);
-      if (timeLeft >= CONFIG.ROUND_DURATION) timeLeft = 0;
-      
-      setCurrentInfo({ currentRound: round, timeLeft: timeLeft, isDrawing: timeLeft <= 5 });
-      setTargetRound(prev => prev === 0 ? round + 1 : prev);
+      const timeLeft = CONFIG.ROUND_DURATION - Math.floor((elapsed / 1000) % CONFIG.ROUND_DURATION);
+      setCurrentInfo({ currentRound: round, timeLeft, isDrawing: timeLeft <= 5 });
+      setTargetRound(prev => prev || round + 1);
     }, 1000);
 
     return () => {
-      unsubUsers(); unsubQueue(); unsubBets(); unsubDep(); unsubWdr(); unsubFin();
+      unsubUsers(); unsubQueue(); unsubBets();
+      unsubDep(); unsubWdr(); unsubFin(); unsubAgents();
       clearInterval(syncTimer);
     };
-  }, [setUsers]); // setInitialUsers 의존성은 제거하거나 포함해도 무방
+  }, []);
 
-  // --- 액션 핸들러 (DB 직접 수정) ---
+  /* ------------------------------------------------------------------ */
+  /* 실장 / 총판 초대코드 생성 (🔥 핵심 기능) */
+  /* ------------------------------------------------------------------ */
+  const addAgent = async () => {
+    if (!newAgentName || !newAgentCode) {
+      alert("이름과 초대코드를 입력하세요");
+      return;
+    }
 
-  // 1. 유저 정보 수정
-  const updateFullUserInfo = async (userId, newPoint, newRefCode, newReferral) => {
-    const pInt = parseInt(newPoint);
-    if (isNaN(pInt)) return alert("숫자를 입력하세요.");
-    
-    if(!window.confirm(`[${userId}] 정보를 수정하시겠습니까?`)) return;
+    const code = newAgentCode.trim().toUpperCase();
 
     try {
-      await updateDoc(doc(db, "users", userId), { 
-        diamond: pInt, 
-        refCode: newRefCode || "", 
-        referral: newReferral || "" 
-      });
-      alert(`[${userId}] 수정 완료`);
-    } catch (e) { alert("저장 실패: " + e.message); }
-  };
+      const ref = doc(db, "invite_codes", code);
+      const snap = await getDoc(ref);
 
-  // 2. 유저 비밀번호 변경
-  const handleChangeUserPassword = async (userId) => {
-    const newPass = window.prompt(`[${userId}] 새 비밀번호 입력:`);
-    if (!newPass) return;
-    try {
-      await updateDoc(doc(db, "users", userId), { password: newPass });
-      alert("비밀번호 변경 완료");
-    } catch (e) { alert("변경 실패: " + e.message); }
-  };
-
-  // 3. 관리자 비밀번호 변경
-  const handleChangeAdminPassword = async () => {
-    const newPass = window.prompt("변경할 '게임 관리자(game)' 접속 비밀번호를 입력하세요:");
-    if (!newPass) return;
-    try {
-      await setDoc(doc(db, "settings", "global"), { gamePw: newPass }, { merge: true });
-      localStorage.setItem("daisy_game_password", newPass); 
-      alert(`관리자 비번 변경됨: ${newPass}`);
-    } catch (e) { alert("저장 실패: " + e.message); }
-  };
-
-  // 4. 입금 승인
-  const approveDeposit = async (req) => {
-    if(!window.confirm(`${req.userId}님의 ${req.amount.toLocaleString()} DIA 입금을 승인하시겠습니까?`)) return;
-    try {
-      const userRef = doc(db, "users", req.userId);
-      const userSnap = await getDoc(userRef);
-      const currentDia = userSnap.exists() ? (userSnap.data().diamond || 0) : 0;
-      const newDia = currentDia + req.amount;
-
-      await updateDoc(userRef, { diamond: newDia });
-
-      await addDoc(collection(db, "finance_history"), { ...req, type: "입금", status: "완료", completedAt: new Date().toISOString() });
-      await deleteDoc(doc(db, "deposit_requests", req.id));
-      
-      alert("입금 승인 완료!");
-    } catch(e) { alert("오류 발생: " + e.message); }
-  };
-
-  // 5. 출금 승인
-  const approveWithdraw = async (req) => {
-    if(!window.confirm(`${req.userId}님의 출금을 처리완료(차감) 하시겠습니까?`)) return;
-    try {
-      const userRef = doc(db, "users", req.userId);
-      const userSnap = await getDoc(userRef);
-      const currentDia = userSnap.exists() ? (userSnap.data().diamond || 0) : 0;
-
-      if(currentDia < req.amount) {
-          if(!window.confirm(`[경고] 잔액 부족(${currentDia}). 강제 차감합니까?`)) return;
+      if (snap.exists()) {
+        alert("이미 존재하는 코드입니다");
+        return;
       }
-      
-      const newDia = currentDia - req.amount;
-      await updateDoc(userRef, { diamond: newDia });
 
-      await addDoc(collection(db, "finance_history"), { ...req, type: "출금", status: "완료", completedAt: new Date().toISOString() });
-      await deleteDoc(doc(db, "withdraw_requests", req.id));
-      alert("출금 처리 완료!");
-    } catch(e) { alert("오류 발생: " + e.message); }
-  };
-
-  // 6. 결과 조작
-  const handleApplyManipulation = async (winner) => {
-    if (!winner) return alert("결과를 선택해주세요.");
-    try {
-      await setDoc(doc(db, "event_manipulation", String(targetRound)), { 
-          winner: winner, 
-          updatedAt: new Date().toISOString() 
+      await setDoc(ref, {
+        code,
+        name: newAgentName,
+        role: "agent",
+        used: false,
+        createdAt: serverTimestamp()
       });
-      setQueue({...queue, [targetRound]: winner});
-      alert(`[${targetRound}회차] 결과를 [${winner}]로 고정했습니다!`);
-      return true; 
-    } catch (e) { alert("실패: " + e.message); return false; }
+
+      alert(`실장 코드 생성 완료: ${code}`);
+      setNewAgentName("");
+      setNewAgentCode("");
+
+    } catch (e) {
+      alert("생성 실패: " + e.message);
+    }
   };
 
-  // 7. 조작 취소
+  /* ------------------------------------------------------------------ */
+  /* 기존 기능 (유지) */
+  /* ------------------------------------------------------------------ */
+
+  const updateFullUserInfo = async (userId, diamond, refCode, referral) => {
+    await updateDoc(doc(db, "users", userId), {
+      diamond: parseInt(diamond),
+      refCode: refCode || "",
+      referral: referral || ""
+    });
+  };
+
+  const handleChangeUserPassword = async (userId) => {
+    const pw = prompt("새 비밀번호:");
+    if (pw) await updateDoc(doc(db, "users", userId), { password: pw });
+  };
+
+  const approveDeposit = async (req) => {
+    const ref = doc(db, "users", req.userId);
+    const snap = await getDoc(ref);
+    const dia = (snap.data()?.diamond || 0) + req.amount;
+    await updateDoc(ref, { diamond: dia });
+    await addDoc(collection(db, "finance_history"), { ...req, type: "입금", completedAt: new Date().toISOString() });
+    await deleteDoc(doc(db, "deposit_requests", req.id));
+  };
+
+  const approveWithdraw = async (req) => {
+    const ref = doc(db, "users", req.userId);
+    const snap = await getDoc(ref);
+    await updateDoc(ref, { diamond: (snap.data()?.diamond || 0) - req.amount });
+    await addDoc(collection(db, "finance_history"), { ...req, type: "출금", completedAt: new Date().toISOString() });
+    await deleteDoc(doc(db, "withdraw_requests", req.id));
+  };
+
+  const handleApplyManipulation = async (winner) => {
+    await setDoc(doc(db, "event_manipulation", String(targetRound)), {
+      winner, updatedAt: new Date().toISOString()
+    });
+  };
+
   const deleteQueue = async (round) => {
-    try {
-      await deleteDoc(doc(db, "event_manipulation", String(round)));
-      const q = { ...queue }; delete q[round]; setQueue(q);
-    } catch (e) { alert("삭제 실패"); }
-  };
-
-  // 8. 총판 추가
-  const addAgent = () => {
-    if (!newAgentName) return;
-    const updated = [...agents, { name: newAgentName, code: newAgentCode, id: Date.now() }];
-    setAgents(updated); 
-    localStorage.setItem("daisy_agents", JSON.stringify(updated));
-    setNewAgentName(""); setNewAgentCode("");
+    await deleteDoc(doc(db, "event_manipulation", String(round)));
   };
 
   return {
-    users, 
+    users,
     currentInfo, targetRound, setTargetRound, queue, deleteQueue,
     gameHistory, sponsorships, activeUsers,
-    depositRequests, withdrawRequests, financeHistory, approveDeposit, approveWithdraw,
-    agents, newAgentName, setNewAgentName, newAgentCode, setNewAgentCode, addAgent,
-    handleApplyManipulation, updateFullUserInfo, handleChangeUserPassword, handleChangeAdminPassword
+    depositRequests, withdrawRequests, financeHistory,
+    approveDeposit, approveWithdraw,
+    agents, newAgentName, setNewAgentName,
+    newAgentCode, setNewAgentCode, addAgent,
+    handleApplyManipulation, updateFullUserInfo,
+    handleChangeUserPassword
   };
 };
