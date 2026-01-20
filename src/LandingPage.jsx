@@ -14,12 +14,16 @@ import {
 } from "firebase/firestore";
 
 /* =====================
-   LANDING PAGE (초대코드 “무조건 먹히게” 완성형)
-   초대코드 검증 우선순위:
-   1) invite_codes/{CODE} (문서ID=CODE)
-   2) invite_codes where code == CODE (자동ID 케이스)
-   3) settings/global 안의 inviteCodes(또는 invite_codes)에서 찾기  ✅(네 프로젝트 구조 대응)
-   + 어디서 찾았는지 debug 표시
+   LANDING PAGE (초대코드 “진짜로” 먹히는 완성형)
+   - 초대코드 검증 우선순위:
+      1) invite_codes/{CODE} (문서ID=CODE)
+      2) invite_codes where code == CODE (자동ID 케이스)
+      3) settings/global 안의 inviteCodes(또는 invite_codes 등)에서 찾기 (폴백)
+   - ✅ Firestore 실제 필드 used/active 둘 다 호환
+   - ✅ 가입 성공 시 invite_codes.used = true 업데이트(가능할 때)
+   - ✅ usedCount + lastUsedAt도 같이 기록(가능할 때)
+   - ✅ 권한 오류/네트워크 오류 메시지 분리
+   - ✅ UI scale 축소 제거(원하면 아래 scale만 다시 바꾸면 됨)
 ===================== */
 
 export default function LandingPage({
@@ -115,7 +119,7 @@ export default function LandingPage({
       authToggle: { marginTop: 16, cursor: "pointer", opacity: 0.85, textAlign: "center", userSelect: "none" },
     });
 
-  // ---- 반응형(PC에서 너무 큰 문제 해결) ----
+  // ---- 반응형 ----
   const [vw, setVw] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1200));
   useEffect(() => {
     const onResize = () => setVw(window.innerWidth);
@@ -123,7 +127,9 @@ export default function LandingPage({
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const isDesktop = vw >= 1024;
-  const scale = 1; // ✅ UI 축소 제거 (원하면 다시 조절)
+
+  // ✅ 축소 제거 (원하면 0.82 등으로 다시 변경)
+  const scale = 1;
 
   // ---- 상태 ----
   const [mode, setMode] = useState("login");
@@ -153,17 +159,9 @@ export default function LandingPage({
     if (!snap.exists()) return { ok: false, via: "settings:none", data: null, docRef: null };
 
     const g = snap.data() || {};
+    const candidates = [g.inviteCodes, g.invite_codes, g.invites, g.refCodes, g.ref_codes].filter(Boolean);
 
-    // 가능한 필드명들 (네가 어디에 저장했는지 몰라서 다 커버)
-    const candidates = [
-      g.inviteCodes,
-      g.invite_codes,
-      g.invites,
-      g.refCodes,
-      g.ref_codes,
-    ].filter(Boolean);
-
-    // 1) 배열 케이스: [{code:"ABC", name:"..."}, ...]
+    // 배열 케이스
     for (const c of candidates) {
       if (Array.isArray(c)) {
         const hit = c.find((x) => String(x?.code || x?.id || x?.key || "").toUpperCase() === CODE);
@@ -171,7 +169,7 @@ export default function LandingPage({
       }
     }
 
-    // 2) 맵 케이스: { "ABC": {name:"..."} }
+    // 맵 케이스
     for (const c of candidates) {
       if (c && typeof c === "object" && !Array.isArray(c)) {
         const hit = c[CODE];
@@ -204,6 +202,20 @@ export default function LandingPage({
     return { ok: false, docRef: null, data: null, via: "none" };
   };
 
+  // ✅ 초대코드 상태 판정 (used/active 혼재 호환)
+  const isInviteDisabled = (data) => {
+    // 1) active === false (있으면 이게 최우선)
+    if (data?.active === false) return true;
+
+    // 2) used === true (네 프로젝트 실제 구조)
+    if (data?.used === true) return true;
+
+    // 3) status === "disabled" 같은 커스텀도 혹시 있을 수 있어서(있으면 막기)
+    if (String(data?.status || "").toLowerCase() === "disabled") return true;
+
+    return false;
+  };
+
   const signup = async () => {
     if (busy) return;
 
@@ -218,10 +230,10 @@ export default function LandingPage({
       const isMaster = inputRef === "ADMIN";
 
       let invite = null;
+
+      // ✅ 초대코드는 반드시 있어야 가입 (ADMIN 제외)
       if (!isMaster) {
         invite = await fetchInvite(inputRef);
-
-        // ✅ 디버그: 어디서 찾았는지 보여줌 (원치 않으면 주석 처리)
         console.log("[INVITE CHECK]", inputRef, invite?.via, invite);
 
         if (!invite.ok) {
@@ -229,8 +241,8 @@ export default function LandingPage({
           return;
         }
 
-        if (invite.data?.active === false) {
-          toast("비활성화된 초대 코드입니다.", "This invitation code is disabled.");
+        if (isInviteDisabled(invite.data)) {
+          toast("이미 사용되었거나 비활성화된 초대 코드입니다.", "This invitation code is already used/disabled.");
           return;
         }
       }
@@ -256,12 +268,19 @@ export default function LandingPage({
         createdAt: serverTimestamp(),
       };
 
+      // ✅ 유저 생성
       await setDoc(myUserRef, newUser);
 
-      // invite_codes 컬렉션에 실제 문서가 있을 때만 카운트 업데이트 시도
+      // ✅ 초대코드 업데이트 (invite_codes 문서가 있을 때만 시도)
+      // - 권한 막혀도 가입은 유지 (try/catch)
       if (invite?.docRef) {
         try {
-          await updateDoc(invite.docRef, { usedCount: increment(1), lastUsedAt: serverTimestamp() });
+          await updateDoc(invite.docRef, {
+            used: true, // ✅ 핵심: 네 실제 필드
+            usedAt: serverTimestamp(),
+            usedCount: increment(1),
+            lastUsedAt: serverTimestamp(),
+          });
         } catch (e) {
           console.warn("[invite update] skipped:", e?.message || e);
         }
@@ -270,15 +289,18 @@ export default function LandingPage({
       if (typeof setUsers === "function") setUsers([...(safeUsers || []), newUser]);
 
       toast("성공적으로 가입되었습니다! 로그인해주세요.", "Signup Success! Please Login.");
-      setId(""); setPw(""); setRef(""); setMode("login");
+      setId("");
+      setPw("");
+      setRef("");
+      setMode("login");
     } catch (e) {
       console.error("[signup] ERROR", e);
       const msg = String(e?.message || e);
 
       if (msg.includes("Missing or insufficient permissions")) {
         toast(
-          "초대코드 확인 권한이 없습니다. (Firebase Rules에서 invite_codes 또는 settings/global 읽기 허용 필요)",
-          "No permission to read invite code. Check Firebase Rules."
+          "권한 문제로 초대코드를 읽거나/업데이트 못하고 있습니다. Firebase Rules에서 invite_codes 읽기/쓰기 허용 필요",
+          "Permission issue: check Firestore Rules for invite_codes."
         );
         return;
       }
@@ -423,7 +445,9 @@ export default function LandingPage({
                   onClick={() => {
                     if (busy) return;
                     setMode(mode === "login" ? "signup" : "login");
-                    setId(""); setPw(""); setRef("");
+                    setId("");
+                    setPw("");
+                    setRef("");
                   }}
                 >
                   {mode === "login"
