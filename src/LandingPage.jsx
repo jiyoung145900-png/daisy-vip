@@ -1,3 +1,5 @@
+import { db } from "./firebase";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useState } from "react";
 
 /* =====================
@@ -16,55 +18,75 @@ export default function LandingPage({
   /* =====================
      회원가입 로직 (원본 유지)
   ===================== */
-  const signup = async () => {
-    if (!id || !pw || !ref) {
-      return alert(lang === "ko" ? "모든 정보를 입력해주세요." : "Please fill all info.");
-    }
+const signup = async () => {
+  if (!id || !pw || !ref) {
+    return alert(lang === "ko" ? "모든 정보를 입력해주세요." : "Please fill all info.");
+  }
 
-    const agents = JSON.parse(localStorage.getItem("daisy_agents") || "[]");
-    const foundAgent = agents.find(a => a.code === ref);
-    const isUserRef = users.find(u => u.id === ref);
-    const isMaster = ref === "ADMIN";
+  const newId = id.trim();
+  const newPw = pw.trim();
+  const inputRef = ref.trim().toUpperCase();
 
-    if (!foundAgent && !isUserRef && !isMaster) {
+  try {
+    // 1) 초대코드 검증: invite_codes에서 확인 (실장 코드)
+    const inviteRef = doc(db, "invite_codes", inputRef);
+    const inviteSnap = await getDoc(inviteRef);
+
+    // 2) 유저 추천코드 검증: users에서 확인 (유저의 refCode = id 구조)
+    const userRefDoc = doc(db, "users", inputRef);
+    const userRefSnap = await getDoc(userRefDoc);
+
+    // 3) 마스터 코드
+    const isMaster = inputRef === "ADMIN";
+
+    // 초대코드가 실장/유저/마스터 어느 것도 아니면 탈락
+    if (!inviteSnap.exists() && !userRefSnap.exists() && !isMaster) {
       return alert(lang === "ko" ? "존재하지 않거나 틀린 초대 코드입니다." : "Invalid referral code.");
     }
 
-    if (users.find(u => u.id === id)) {
+    // 아이디 중복 체크: users 컬렉션에서 확인
+    const myUserRef = doc(db, "users", newId);
+    const myUserSnap = await getDoc(myUserRef);
+    if (myUserSnap.exists()) {
       return alert(lang === "ko" ? "이미 존재하는 아이디입니다." : "ID already exists.");
     }
 
-    const startNo = 2783982189;
-    const generatedNo = (startNo + users.length).toString();
+    // 실장 이름(있으면)
+    const agentName = inviteSnap.exists() ? (inviteSnap.data()?.name || "") : "";
 
-    const newUser = { 
-      id,
-      pw,
+    // 고유번호는 기존처럼 users.length 기반이 아니라,
+    // Firestore 기준으로 안정적으로 "가입시간 기반"으로 생성 (충돌 방지)
+    const generatedNo = String(Date.now());
+
+    const newUser = {
+      id: newId,
+      password: newPw,         // ✅ admin 로직이 password 필드 쓰고 있어서 통일
+      pw: newPw,               // ✅ 기존 코드 호환 (이미 pw로 쓰는 곳 있으면 유지)
       no: generatedNo,
-      referral: ref,
+      referral: inputRef,      // ✅ 추천인/실장 코드 저장
       diamond: 0,
-      refCode: id,
-      agentName: foundAgent ? foundAgent.name : "",
-      joinedAt: new Date().toISOString()
+      refCode: newId,          // ✅ 내 추천코드 = 내 아이디
+      agentName,
+      joinedAt: new Date().toISOString(),
+      createdAt: serverTimestamp()
     };
 
-    const updatedUsers = [...users, newUser];
-    setUsers(updatedUsers);
+    // Firestore에 생성
+    await setDoc(myUserRef, newUser, { merge: true });
 
-    if (syncToFirebase) {
-      await syncToFirebase({ users: updatedUsers });
-    }
+    // 로컬 상태도 갱신(화면 즉시 반영용)
+    const updatedUsers = [...(users || []), newUser];
+    setUsers(updatedUsers);
 
     alert(lang === "ko" ? "성공적으로 가입되었습니다! 로그인해주세요." : "Signup Success! Please Login.");
     setId(""); setPw(""); setRef("");
     setMode("login");
-  };
 
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter") {
-      mode === "login" ? onLogin(id, pw) : signup();
-    }
-  };
+  } catch (e) {
+    console.error(e);
+    alert("회원가입 오류: " + (e?.message || e));
+  }
+};
 
   return (
     <div
