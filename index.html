@@ -3,8 +3,12 @@
   <head>
     <meta charset="UTF-8" />
 
-    <!-- favicon -->
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <!-- ✅ Favicon (탭 로고) -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon.png" />
+
+    <!-- ✅ iOS 홈화면 아이콘 (있으면 더 좋음: public/apple-touch-icon.png) -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 
     <!-- ✅ iOS Safari 안정 viewport (자동 확대 방지) -->
     <meta
@@ -15,39 +19,26 @@
     <title>daisy-core</title>
 
     <style>
-      /* =====================
-         Global Reset
-      ===================== */
       html, body {
         margin: 0;
         padding: 0;
         width: 100%;
         height: 100%;
         background-color: #000;
-        -webkit-text-size-adjust: 100%; /* ✅ iOS 폰트 자동 확대 방지 */
+        -webkit-text-size-adjust: 100%;
       }
 
-      body {
-        overflow-x: clip; /* iOS 확대 고착 방지 */
-      }
+      body { overflow-x: clip; }
 
-      /* =====================
-         React Root
-      ===================== */
       #root {
         width: 100%;
-        min-height: 100dvh; /* ✅ iOS 주소창 대응 */
+        min-height: 100dvh;
         display: flex;
         flex-direction: column;
       }
 
-      /* =====================
-         iOS input 자동 줌 방지
-      ===================== */
-      input,
-      textarea,
-      select {
-        font-size: 16px; /* 🔥 iOS 자동 확대 차단 핵심 */
+      input, textarea, select {
+        font-size: 16px;
       }
     </style>
   </head>
