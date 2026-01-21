@@ -73,13 +73,15 @@ const translations = {
 };
 
 export default function App() {
-  // --- Base State ---
+  // --- Base State (캐시용) ---
   const [lang, setLang] = useState(() => load("lang", "ko"));
   const [loggedIn, setLoggedIn] = useState(() => load("loggedIn", false));
   const [isAdmin, setIsAdmin] = useState(() => load("isAdmin", false));
   const [isGuest, setIsGuest] = useState(() => load("isGuest", false));
-  const [users, setUsers] = useState(() => load("users", []));
   const [currentUser, setCurrentUser] = useState(() => load("currentUser", null));
+
+  // ✅ users 배열은 "UI/관리용 캐시"로만 둔다 (로그인 판단에 사용하지 않음!)
+  const [users, setUsers] = useState(() => load("users", []));
 
   const [appAvatarImage, setAppAvatarImage] = useState(null);
   const [appAvatarIdx, setAppAvatarIdx] = useState(0);
@@ -113,16 +115,14 @@ export default function App() {
   const [adminPreviewMode, setAdminPreviewMode] = useState("dashboard");
   const t = useMemo(() => translations[lang] || translations.ko, [lang]);
 
-  // ===== 핵심: settings/global 스냅샷 (빈 배열/0/빈문자도 반영되게) =====
+  // ===== settings/global 스냅샷 =====
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "settings", "global"), (docSnap) => {
       if (!docSnap.exists()) return;
       const data = docSnap.data() || {};
 
-      // 객체류
       if (data.hero !== undefined) setHero(data.hero);
 
-      // 스칼라/문자열/숫자류 (undefined만 거른다)
       if (data.videoURL !== undefined) setVideoURL(data.videoURL);
       if (data.logo !== undefined) setLogo(data.logo);
       if (data.logoSize !== undefined) setLogoSize(data.logoSize);
@@ -130,30 +130,26 @@ export default function App() {
       if (data.innerLogo !== undefined) setInnerLogo(data.innerLogo);
       if (data.telegramLink !== undefined) setTelegramLink(data.telegramLink);
 
-      // 배열류 (빈 배열도 무조건 반영)
       if (data.members !== undefined) setMembers(Array.isArray(data.members) ? data.members : []);
       if (data.slideImages !== undefined) setSlideImages(Array.isArray(data.slideImages) ? data.slideImages : []);
       if (data.videos !== undefined) setVideos(Array.isArray(data.videos) ? data.videos : []);
       if (data.users !== undefined) setUsers(Array.isArray(data.users) ? data.users : []);
 
-      // 비번 필드명 혼재 대응: adminPassword 우선, 없으면 adminPw
       const nextAdminPw = data.adminPassword ?? data.adminPw;
       if (nextAdminPw !== undefined) setAdminPw(nextAdminPw);
-
       if (data.gamePw !== undefined) setGamePw(data.gamePw);
     });
 
     return () => unsub();
   }, []);
 
-  // ===== 핵심: 서버 저장 (merge:true로 기존 필드 날리지 않게) =====
+  // ===== 서버 저장 (merge:true) =====
   const syncToFirebase = async (updates = {}) => {
     try {
       const nextAdminPw = updates.adminPassword ?? updates.adminPw ?? adminPw;
       const nextGamePw = updates.gamePw ?? gamePw;
 
       const finalData = {
-        // 화면/컨텐츠
         hero,
         videoURL,
         logo,
@@ -166,12 +162,10 @@ export default function App() {
         telegramLink,
         users,
 
-        // 비번은 둘 다 저장(호환)
         adminPassword: nextAdminPw,
         adminPw: nextAdminPw,
         gamePw: nextGamePw,
 
-        // 업데이트 오버레이
         ...updates,
       };
 
@@ -186,10 +180,12 @@ export default function App() {
 
   const saveToFirebase = async () => syncToFirebase({});
 
-  // ===== 유저 포인트/추천코드 sync (브로드캐스트 호환 유지) =====
+  // ===== 유저 포인트/추천코드 sync (브로드캐스트 유지) =====
   const syncUpdate = useCallback((targetId, newPoint, newRefCode, newReferral) => {
     setUsers((prev) =>
-      prev.map((u) => (u.id === targetId ? { ...u, diamond: newPoint, refCode: newRefCode, referral: newReferral } : u))
+      (Array.isArray(prev) ? prev : []).map((u) =>
+        u?.id === targetId ? { ...u, diamond: newPoint, refCode: newRefCode, referral: newReferral } : u
+      )
     );
     setCurrentUser((prev) =>
       prev?.id === targetId ? { ...prev, diamond: newPoint, refCode: newRefCode, referral: newReferral } : prev
@@ -213,14 +209,16 @@ export default function App() {
     return () => window.removeEventListener("user_point_update", handleLocalUpdate);
   }, [syncUpdate]);
 
-  // ===== LocalStorage 자동 저장 =====
+  // ===== LocalStorage 자동 저장 (캐시) =====
   useEffect(() => {
     save("lang", lang);
     save("loggedIn", loggedIn);
     save("isAdmin", isAdmin);
     save("isGuest", isGuest);
-    save("users", users);
     save("currentUser", currentUser);
+
+    // users는 캐시일 뿐
+    save("users", users);
 
     save("members", members);
     save("hero", hero);
@@ -256,18 +254,41 @@ export default function App() {
     telegramLink,
   ]);
 
-  // ===== 로그인 (서버 비번을 항상 최신으로 읽고 체크) =====
+  // ✅ 핵심: 일반유저 로그인 = Firestore(users/{id})에서 직접 읽는다
+  const loginNormalUserFromFirestore = async (id, pw) => {
+    const uid = String(id || "").trim();
+    const upw = String(pw || "").trim();
+    if (!uid || !upw) return { ok: false, msg: lang === "ko" ? "아이디/비밀번호를 입력하세요." : "Enter ID/PW." };
+
+    try {
+      const snap = await getDoc(doc(db, "users", uid));
+      if (!snap.exists()) return { ok: false, msg: lang === "ko" ? "로그인 정보가 틀립니다." : "Login Failed" };
+
+      const u = snap.data() || {};
+      const storedPw = u.pw ?? u.password; // 혼재 대응
+      if (storedPw !== upw) return { ok: false, msg: lang === "ko" ? "로그인 정보가 틀립니다." : "Login Failed" };
+
+      return { ok: true, user: { ...u, id: u.id ?? uid } };
+    } catch (e) {
+      console.error("[loginNormalUserFromFirestore] ERROR", e);
+      return { ok: false, msg: "Login error: " + (e?.message || String(e)) };
+    }
+  };
+
+  // ===== 로그인 (관리자 비번은 settings/global에서 최신값 확인) =====
   const handleLoginAction = async (id, pw) => {
+    const uid = String(id || "").trim();
+    const upw = String(pw || "").trim();
+
+    // 서버 비번 최신 읽기
     let serverAdminPw = adminPw;
     let serverGamePw = gamePw;
-
     try {
       const snap = await getDoc(doc(db, "settings", "global"));
       if (snap.exists()) {
         const data = snap.data() || {};
         serverAdminPw = data.adminPassword ?? data.adminPw ?? serverAdminPw;
         serverGamePw = data.gamePw ?? serverGamePw;
-
         setAdminPw(serverAdminPw);
         setGamePw(serverGamePw);
       }
@@ -276,20 +297,26 @@ export default function App() {
     }
 
     // 게임 관리자
-    if (id === "game") {
-      if (pw === serverGamePw) {
+    if (uid === "game") {
+      if (upw === serverGamePw) {
         setIsIndependentAdmin(true);
         setLoggedIn(true);
+        // 게임 관리자도 currentUser 세팅해두면 상태 꼬임 방지
+        setCurrentUser({ id: "game", no: "GAME", diamond: 0, rewards: 0, refCode: "" });
+        setIsGuest(false);
+        setIsAdmin(false);
         return;
       }
       return alert("게임 관리자 비밀번호가 틀립니다.");
     }
 
     // 디자인 관리자
-    if (id === ADMIN_ID) {
-      if (pw === serverAdminPw) {
+    if (uid === ADMIN_ID) {
+      if (upw === serverAdminPw) {
         setIsAdmin(true);
         setLoggedIn(true);
+        setIsGuest(false);
+        setIsIndependentAdmin(false);
         setCurrentUser({ id: ADMIN_ID, no: "000001", diamond: 999999, rewards: 0, refCode: "MASTER" });
         setAdminPreviewMode("dashboard");
         return;
@@ -297,12 +324,14 @@ export default function App() {
       return alert("디자인 관리자 비밀번호가 틀립니다.");
     }
 
-    // 일반 유저
-    const u = (Array.isArray(users) ? users : []).find((u) => u?.id === id && u?.pw === pw);
-    if (!u) return alert(lang === "ko" ? "로그인 정보가 틀립니다." : "Login Failed");
+    // ✅ 일반 유저 (Firestore 기준)
+    const res = await loginNormalUserFromFirestore(uid, upw);
+    if (!res.ok) return alert(res.msg);
 
-    setCurrentUser({ ...u });
+    setCurrentUser(res.user);
     setLoggedIn(true);
+    setIsAdmin(false);
+    setIsIndependentAdmin(false);
     setIsGuest(false);
   };
 
@@ -346,8 +375,8 @@ export default function App() {
           <LandingPage
             t={t}
             lang={lang}
-            users={users}
-            setUsers={setUsers}
+            users={users} // UI용
+            setUsers={setUsers} // UI용
             hero={hero}
             videoURL={videoURL}
             logo={logo}
@@ -362,6 +391,7 @@ export default function App() {
               setCurrentUser(guestUser);
               setLoggedIn(true);
               setIsAdmin(false);
+              setIsIndependentAdmin(false);
               setIsGuest(true);
             }}
             syncToFirebase={syncToFirebase}
@@ -436,7 +466,7 @@ export default function App() {
   );
 }
 
-/* ====== styles/dashStyles (네 원본 유지) ====== */
+/* ====== styles/dashStyles (원본 유지) ====== */
 const styles = {
   app: { width: "100%", background: "#000", fontFamily: "'Inter', sans-serif", color: "#fff", position: "relative" },
   bgWrap: { position: "fixed", inset: 0, zIndex: 0 },
