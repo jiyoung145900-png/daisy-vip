@@ -1,3 +1,4 @@
+console.log("🔥 VERCEL BUILD CHECK 2026-01-21 🔥");
 import { useEffect, useState } from "react";
 import { db } from "./firebase";
 import {
