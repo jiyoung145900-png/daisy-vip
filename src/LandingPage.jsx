@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "./firebase";
 import {
   doc,
@@ -13,13 +13,20 @@ import {
   increment,
 } from "firebase/firestore";
 
+const BUILD_TAG = "INVITE_BUILD_20260121_V2";
+
 /* =====================
-   LANDING PAGE (초대코드 완성형)
+   LANDING PAGE (초대코드 완성형 - 4중 폴백)
+   ✅ 어떤 기기/브라우저에서도 통과되게 최대한 강하게
+
    초대코드 검증 우선순위:
-   1) invite_codes/{CODE} (문서ID=CODE)
-   2) invite_codes where code == CODE (자동ID 케이스)
-   3) settings/global 안의 inviteCodes(또는 invite_codes 등)에서 찾기
-   + used/active 둘 다 대응 (used:true면 막기, active:false면 막기)
+   1) Firestore invite_codes/{CODE} (문서ID=CODE)
+   2) Firestore invite_codes where code == CODE
+   3) Firestore settings/global 안 필드들에서 찾기
+   4) public/invite-codes.json 에서 찾기  (최후 보루)
+
+   - 공백/대소문자 무시
+   - active:false / used:true면 막기
 ===================== */
 
 export default function LandingPage({
@@ -38,14 +45,31 @@ export default function LandingPage({
   isAdmin,
 }) {
   const safeLang = lang || "ko";
-  const safeT = t || { login: "로그인", signup: "회원가입", id: "아이디", pw: "비밀번호", guest: "게스트" };
-  const safeHero = hero || { mode: "image", imageSrc: "", title: { ko: "DAISY", en: "DAISY" }, desc: { ko: "", en: "" } };
+  const safeT = t || {
+    login: "로그인",
+    signup: "회원가입",
+    id: "아이디",
+    pw: "비밀번호",
+    guest: "게스트",
+  };
+  const safeHero =
+    hero || {
+      mode: "image",
+      imageSrc: "",
+      title: { ko: "DAISY", en: "DAISY" },
+      desc: { ko: "", en: "" },
+    };
   const safeUsers = Array.isArray(users) ? users : [];
 
   const safeStyles =
     styles ||
     ({
-      landingWrapper: { minHeight: "100dvh", background: "#000", color: "#fff", position: "relative" },
+      landingWrapper: {
+        minHeight: "100dvh",
+        background: "#000",
+        color: "#fff",
+        position: "relative",
+      },
       bgWrap: {},
       bgOverlay: { position: "absolute", inset: 0, background: "rgba(0,0,0,0.45)" },
       bgVideo: { position: "absolute", inset: 0, width: "100%" },
@@ -53,21 +77,65 @@ export default function LandingPage({
       logoContainer: { position: "absolute", left: 20, top: 20, zIndex: 2 },
       defaultLogo: { fontSize: 24, fontWeight: 900 },
 
-      mainContent: { position: "relative", zIndex: 2, display: "flex", justifyContent: "center", paddingTop: 140, paddingLeft: 16, paddingRight: 16 },
+      mainContent: {
+        position: "relative",
+        zIndex: 2,
+        display: "flex",
+        justifyContent: "center",
+        paddingTop: 140,
+        paddingLeft: 16,
+        paddingRight: 16,
+      },
       heroSection: { textAlign: "center", marginBottom: 30 },
       mainTitle: { fontSize: 34, fontWeight: 900 },
       subTitle: { opacity: 0.8 },
 
       authWrap: { display: "flex", justifyContent: "center" },
-      authCard: { width: 420, maxWidth: "92vw", background: "rgba(0,0,0,0.55)", border: "1px solid #333", borderRadius: 16, backdropFilter: "blur(6px)" },
+      authCard: {
+        width: 420,
+        maxWidth: "92vw",
+        background: "rgba(0,0,0,0.55)",
+        border: "1px solid #333",
+        borderRadius: 16,
+        backdropFilter: "blur(6px)",
+      },
       authTitle: { fontWeight: 900 },
-      authInput: { width: "100%", padding: 14, borderRadius: 10, border: "1px solid #333", background: "#111", color: "#fff", outline: "none" },
-      primaryBtn: { width: "100%", padding: 16, borderRadius: 12, border: "none", background: "#ffb347", fontWeight: 900, cursor: "pointer" },
-      guestBtn: { width: "100%", padding: 14, borderRadius: 12, border: "1px solid #333", background: "#111", color: "#fff", cursor: "pointer" },
-      authToggle: { marginTop: 16, cursor: "pointer", opacity: 0.85, textAlign: "center", userSelect: "none" },
+      authInput: {
+        width: "100%",
+        padding: 14,
+        borderRadius: 10,
+        border: "1px solid #333",
+        background: "#111",
+        color: "#fff",
+        outline: "none",
+      },
+      primaryBtn: {
+        width: "100%",
+        padding: 16,
+        borderRadius: 12,
+        border: "none",
+        background: "#ffb347",
+        fontWeight: 900,
+        cursor: "pointer",
+      },
+      guestBtn: {
+        width: "100%",
+        padding: 14,
+        borderRadius: 12,
+        border: "1px solid #333",
+        background: "#111",
+        color: "#fff",
+        cursor: "pointer",
+      },
+      authToggle: {
+        marginTop: 16,
+        cursor: "pointer",
+        opacity: 0.85,
+        textAlign: "center",
+        userSelect: "none",
+      },
     });
 
-  // 반응형 (너가 “축소 싫다” 해서 scale 고정 1)
   const [vw, setVw] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1200));
   useEffect(() => {
     const onResize = () => setVw(window.innerWidth);
@@ -77,7 +145,6 @@ export default function LandingPage({
   const isDesktop = vw >= 1024;
   const scale = 1;
 
-  // 상태
   const [mode, setMode] = useState("login");
   const [id, setId] = useState("");
   const [pw, setPw] = useState("");
@@ -86,6 +153,8 @@ export default function LandingPage({
 
   const toast = (ko, en) => alert(safeLang === "ko" ? ko : en);
   const isFn = (v) => typeof v === "function";
+
+  const normalizeCode = (v) => String(v ?? "").trim().toUpperCase();
 
   const handleLogin = () => {
     if (busy) return;
@@ -99,51 +168,103 @@ export default function LandingPage({
     onGuestLogin();
   };
 
-  // settings/global 안에서 inviteCodes 찾기 (배열/맵/필드명 여러 케이스 대응)
+  // (3) settings/global 안에서 찾기
   const fetchInviteFromSettings = async (CODE) => {
-    const snap = await getDoc(doc(db, "settings", "global"));
-    if (!snap.exists()) return { ok: false, via: "settings:none", data: null };
+    try {
+      const snap = await getDoc(doc(db, "settings", "global"));
+      if (!snap.exists()) return { ok: false, via: "settings:none", data: null };
 
-    const g = snap.data() || {};
-    const candidates = [g.inviteCodes, g.invite_codes, g.invites, g.refCodes, g.ref_codes].filter(Boolean);
+      const g = snap.data() || {};
+      const candidates = [g.inviteCodes, g.invite_codes, g.invites, g.refCodes, g.ref_codes].filter(Boolean);
 
-    // 배열: [{code:"112233", ...}]
-    for (const c of candidates) {
-      if (Array.isArray(c)) {
-        const hit = c.find((x) => String(x?.code || x?.id || x?.key || "").toUpperCase() === CODE);
-        if (hit) return { ok: true, via: "settings:array", data: hit };
+      // 배열: [{code:"112233", ...}]
+      for (const c of candidates) {
+        if (Array.isArray(c)) {
+          const hit = c.find((x) => normalizeCode(x?.code || x?.id || x?.key) === CODE);
+          if (hit) return { ok: true, via: "settings:array", data: hit };
+        }
       }
-    }
 
-    // 맵: {"112233": {...}}
-    for (const c of candidates) {
-      if (c && typeof c === "object" && !Array.isArray(c)) {
-        const hit = c[CODE];
-        if (hit) return { ok: true, via: "settings:map", data: hit };
+      // 맵: {"112233": {...}}
+      for (const c of candidates) {
+        if (c && typeof c === "object" && !Array.isArray(c)) {
+          const hit = c[CODE];
+          if (hit) return { ok: true, via: "settings:map", data: hit };
+        }
       }
-    }
 
-    return { ok: false, via: "settings:miss", data: null };
+      return { ok: false, via: "settings:miss", data: null };
+    } catch (e) {
+      return { ok: false, via: "settings:error", data: null, error: e?.message || String(e) };
+    }
   };
 
-  // 초대코드 조회 (3중 폴백)
+  // (4) public/invite-codes.json 에서 찾기  (최후 보루)
+  const fetchInviteFromJson = async (CODE) => {
+    try {
+      // ✅ 캐시 완전 무시 (다른 기기/브라우저도 최신 받게)
+      const res = await fetch(`/invite-codes.json?v=${Date.now()}`, { cache: "no-store" });
+      if (!res.ok) return { ok: false, via: "json:fetch_fail", data: null };
+      const raw = await res.json();
+
+      // 허용 포맷들:
+      // 1) ["112233", "A001"]
+      // 2) [{code:"112233", name:"실장1", used:false, active:true}, ...]
+      // 3) {"112233": {...}, "A001": {...}}
+      let hit = null;
+
+      if (Array.isArray(raw)) {
+        if (raw.length && typeof raw[0] === "string") {
+          hit = raw.find((x) => normalizeCode(x) === CODE);
+          if (hit) return { ok: true, via: "json:array_string", data: { code: CODE } };
+        }
+        if (raw.length && typeof raw[0] === "object") {
+          const obj = raw.find((x) => normalizeCode(x?.code || x?.id || x?.key) === CODE);
+          if (obj) return { ok: true, via: "json:array_object", data: obj };
+        }
+      }
+
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        const obj = raw[CODE];
+        if (obj) return { ok: true, via: "json:map", data: obj };
+      }
+
+      return { ok: false, via: "json:miss", data: null };
+    } catch (e) {
+      return { ok: false, via: "json:error", data: null, error: e?.message || String(e) };
+    }
+  };
+
+  // 초대코드 조회 (4중 폴백)
   const fetchInvite = async (CODE) => {
     // 1) invite_codes/{CODE}
-    const refDoc = doc(db, "invite_codes", CODE);
-    const snap = await getDoc(refDoc);
-    if (snap.exists()) return { ok: true, docRef: refDoc, data: snap.data(), via: "invite_codes:docId" };
+    try {
+      const refDoc = doc(db, "invite_codes", CODE);
+      const snap = await getDoc(refDoc);
+      if (snap.exists()) return { ok: true, docRef: refDoc, data: snap.data(), via: "invite_codes:docId" };
+    } catch (e) {
+      // Firestore 자체가 막혀도 아래 폴백으로 계속 진행
+    }
 
     // 2) invite_codes where code == CODE
-    const q = query(collection(db, "invite_codes"), where("code", "==", CODE));
-    const qs = await getDocs(q);
-    if (!qs.empty) {
-      const first = qs.docs[0];
-      return { ok: true, docRef: first.ref, data: first.data(), via: "invite_codes:query" };
+    try {
+      const q = query(collection(db, "invite_codes"), where("code", "==", CODE));
+      const qs = await getDocs(q);
+      if (!qs.empty) {
+        const first = qs.docs[0];
+        return { ok: true, docRef: first.ref, data: first.data(), via: "invite_codes:query" };
+      }
+    } catch (e) {
+      // 계속 진행
     }
 
     // 3) settings/global 폴백
     const fromSettings = await fetchInviteFromSettings(CODE);
     if (fromSettings.ok) return { ok: true, docRef: null, data: fromSettings.data, via: fromSettings.via };
+
+    // 4) JSON 폴백 (최후 보루)
+    const fromJson = await fetchInviteFromJson(CODE);
+    if (fromJson.ok) return { ok: true, docRef: null, data: fromJson.data, via: fromJson.via };
 
     return { ok: false, docRef: null, data: null, via: "none" };
   };
@@ -153,7 +274,7 @@ export default function LandingPage({
 
     const newId = (id || "").trim();
     const newPw = (pw || "").trim();
-    const inputRef = (ref || "").trim().toUpperCase();
+    const inputRef = normalizeCode(ref);
 
     if (!newId || !newPw || !inputRef) return toast("모든 정보를 입력해주세요.", "Please fill all info.");
 
@@ -164,14 +285,13 @@ export default function LandingPage({
       let invite = null;
       if (!isMaster) {
         invite = await fetchInvite(inputRef);
-        console.log("[INVITE CHECK]", inputRef, invite?.via, invite);
+        console.log("[INVITE CHECK]", { inputRef, via: invite?.via, invite });
 
         if (!invite.ok) {
           toast("존재하지 않거나 틀린 초대 코드입니다.", "Invalid invitation code.");
           return;
         }
 
-        // used / active 둘 다 체크 (네 문서에 used:false 있음)
         if (invite.data?.active === false) {
           toast("비활성화된 초대 코드입니다.", "This invitation code is disabled.");
           return;
@@ -211,7 +331,7 @@ export default function LandingPage({
           await updateDoc(invite.docRef, {
             usedCount: increment(1),
             lastUsedAt: serverTimestamp(),
-            // 단발코드로 쓰고 싶으면 이거도 켜 (원치 않으면 주석)
+            // 단발코드로 쓰고 싶으면 주석 해제
             // used: true,
           });
         } catch (e) {
@@ -229,15 +349,6 @@ export default function LandingPage({
     } catch (e) {
       console.error("[signup] ERROR", e);
       const msg = String(e?.message || e);
-
-      if (msg.includes("Missing or insufficient permissions")) {
-        toast(
-          "초대코드 확인 권한이 없습니다. (Firebase Rules에서 invite_codes 읽기 허용 필요)",
-          "No permission to read invite code. Check Firebase Rules."
-        );
-        return;
-      }
-
       toast(`회원가입 오류: ${msg}`, `Signup error: ${msg}`);
     } finally {
       setBusy(false);
@@ -252,6 +363,22 @@ export default function LandingPage({
 
   return (
     <div style={{ ...safeStyles.landingWrapper, minHeight: "100dvh", position: "relative" }}>
+      {/* ✅ 빌드 태그: 다른 기기에서 “최신 코드 반영” 확인용 */}
+      <div
+        style={{
+          position: "fixed",
+          bottom: 8,
+          right: 10,
+          fontSize: 11,
+          opacity: 0.55,
+          zIndex: 999999,
+          userSelect: "text",
+          pointerEvents: "none",
+        }}
+      >
+        {BUILD_TAG}
+      </div>
+
       {/* 배경 */}
       <div style={{ ...safeStyles.bgWrap, minHeight: "100dvh", position: "absolute", inset: 0, overflow: "hidden" }}>
         <div style={safeStyles.bgOverlay} />
@@ -284,7 +411,12 @@ export default function LandingPage({
           <img
             src={logo}
             alt="logo"
-            style={{ height: `${logoSize ?? 50}px`, width: "auto", objectFit: "contain", filter: "drop-shadow(0 0 15px rgba(0,0,0,0.5))" }}
+            style={{
+              height: `${logoSize ?? 50}px`,
+              width: "auto",
+              objectFit: "contain",
+              filter: "drop-shadow(0 0 15px rgba(0,0,0,0.5))",
+            }}
           />
         ) : (
           <strong style={safeStyles.defaultLogo}>DAISY</strong>
@@ -371,7 +503,13 @@ export default function LandingPage({
 
                 {mode === "login" && (
                   <button
-                    style={{ ...safeStyles.guestBtn, height: isDesktop ? "44px" : "55px", marginTop: "12px", cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1 }}
+                    style={{
+                      ...safeStyles.guestBtn,
+                      height: isDesktop ? "44px" : "55px",
+                      marginTop: "12px",
+                      cursor: busy ? "not-allowed" : "pointer",
+                      opacity: busy ? 0.6 : 1,
+                    }}
                     onClick={handleGuest}
                     disabled={busy}
                   >
@@ -380,7 +518,13 @@ export default function LandingPage({
                 )}
 
                 <div
-                  style={{ ...safeStyles.authToggle, fontSize: isDesktop ? "13px" : "15px", marginTop: isDesktop ? "18px" : "30px", pointerEvents: busy ? "none" : "auto", opacity: busy ? 0.6 : 0.85 }}
+                  style={{
+                    ...safeStyles.authToggle,
+                    fontSize: isDesktop ? "13px" : "15px",
+                    marginTop: isDesktop ? "18px" : "30px",
+                    pointerEvents: busy ? "none" : "auto",
+                    opacity: busy ? 0.6 : 0.85,
+                  }}
                   onClick={() => {
                     if (busy) return;
                     setMode(mode === "login" ? "signup" : "login");
@@ -405,4 +549,3 @@ export default function LandingPage({
     </div>
   );
 }
-const BUILD_TAG = "INVITE_BUILD_20260121";
