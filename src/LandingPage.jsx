@@ -405,3 +405,4 @@ export default function LandingPage({
     </div>
   );
 }
+const BUILD_TAG = "INVITE_BUILD_20260121";
