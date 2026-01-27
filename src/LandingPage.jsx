@@ -1,11 +1,13 @@
 import { useState } from "react";
 // ✅ 1. Firebase 관련 기능 불러오기
-// (firebase.js 파일 경로가 맞는지 꼭 확인하세요! 보통 "./firebase" 또는 "../firebase" 입니다)
+// (경로 확인 필수: firebase.js 파일 위치에 따라 "./firebase" 또는 "../firebase")
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "./firebase"; 
 
 /* =====================
-   LANDING PAGE (최종 완성본: Firebase 연동 + 모든 UI 유지)
+   LANDING PAGE (범인 검거용 탐정 버전)
+   - UI/기능: 원본과 100% 동일
+   - 변경점: 회원가입 실패 시 '접속 중인 프로젝트 ID'를 알려주는 기능 추가
 ===================== */
 export default function LandingPage({ 
   t, lang, users, setUsers, onLogin, onGuestLogin, 
@@ -18,7 +20,7 @@ export default function LandingPage({
   const [ref, setRef] = useState("");
 
   /* =====================
-      회원가입 로직 (Firebase DB 연동 + 공백 제거)
+      회원가입 로직 (탐정 모드 🕵️‍♂️)
   ===================== */
   const signup = async () => {
     // 1. 입력값 확인
@@ -26,7 +28,7 @@ export default function LandingPage({
       return alert(lang === "ko" ? "모든 정보를 입력해주세요." : "Please fill all info.");
     }
 
-    // 2. 중요: 모바일에서 뒤에 공백이 들어가는 경우 방지 (.trim())
+    // 2. 공백 제거 (실수 방지)
     const cleanRef = ref.trim();
 
     // 3. 이미 존재하는 아이디인지 확인
@@ -44,38 +46,49 @@ export default function LandingPage({
       isValidRef = true;
       agentName = "ADMIN";
     } 
-    // (B) 기존 유저의 ID를 추천인으로 입력한 경우 (친구 추천)
+    // (B) 기존 유저 (친구 추천)
     else {
       const userRef = users.find(u => u.id === cleanRef);
       if (userRef) {
         isValidRef = true;
         agentName = userRef.id;
       } else {
-        // (C) 🔥 Firebase 'invite_codes' 컬렉션 조회 (여기가 핵심)
+        // (C) 🔥 Firebase DB 조회 (여기가 범인 잡는 구간)
         try {
-          // 입력한 초대 코드(cleanRef)로 DB 문서를 찾습니다.
-          const codeDocRef = doc(db, "invite_codes", cleanRef);
-          const codeSnap = await getDoc(codeDocRef);
+          // 현재 접속된 프로젝트 ID 확인
+          const currentProject = db.app.options.projectId;
 
-          if (codeSnap.exists()) {
+          const docRef = doc(db, "invite_codes", cleanRef);
+          const docSnap = await getDoc(docRef);
+
+          if (docSnap.exists()) {
             isValidRef = true;
-            const data = codeSnap.data();
-            agentName = data.name; // DB에 있는 에이전트 이름 (예: '가을') 가져오기
+            agentName = docSnap.data().name;
+          } else {
+            // 🚨 실패 시: 접속 중인 프로젝트 ID를 화면에 띄움
+            return alert(
+              `[초대 코드 확인 실패]\n` +
+              `입력한 코드: ${cleanRef}\n` +
+              `----------------------------\n` +
+              `[범인 찾기 힌트]\n` +
+              `현재 접속된 프로젝트 ID:\n` +
+              `👉 ${currentProject}\n` +
+              `----------------------------\n` +
+              `위 ID가 Firebase 콘솔의 프로젝트 ID와\n` +
+              `정확히 일치하는지 확인해보세요!\n` +
+              `(틀리다면 Vercel 환경 변수가 잘못된 것입니다)`
+            );
           }
         } catch (error) {
-          console.error("초대 코드 확인 중 오류:", error);
-          // 사용자에게는 깔끔한 메시지만 보여줍니다.
-          return alert(lang === "ko" ? "서버 연결에 실패했습니다. 잠시 후 다시 시도해주세요." : "Server Error.");
+          console.error("DB 에러:", error);
+          return alert(`서버 에러 발생: ${error.message}`);
         }
       }
     }
 
-    // 5. 검증 실패 시 중단
-    if (!isValidRef) {
-      return alert(lang === "ko" ? "존재하지 않거나 틀린 초대 코드입니다." : "Invalid referral code.");
-    }
+    // 5. 검증 성공 시 가입 진행
+    if (!isValidRef) return; // 위에서 alert 띄웠으므로 중단
 
-    // 6. 유저 생성 및 저장
     const startNo = 2783982189;
     const generatedNo = (startNo + users.length).toString();
 
@@ -86,14 +99,13 @@ export default function LandingPage({
       referral: cleanRef,
       diamond: 0,
       refCode: id,
-      agentName: agentName, // 위에서 찾아낸 정확한 에이전트 이름
+      agentName: agentName,
       joinedAt: new Date().toISOString()
     };
 
     const updatedUsers = [...users, newUser];
     setUsers(updatedUsers);
 
-    // Firebase 유저 데이터 동기화
     if (syncToFirebase) {
       await syncToFirebase({ users: updatedUsers });
     }
@@ -113,7 +125,7 @@ export default function LandingPage({
     <div
       style={{
         ...styles.landingWrapper,
-        minHeight: "100dvh" // ✅ iOS 확대 방지 및 레이아웃 깨짐 방지
+        minHeight: "100dvh" 
       }}
     >
       {/* =====================
